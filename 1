@@ -246,22 +246,20 @@ function TokenStream:expect_type(type)
 end
 
 function TokenStream:split(separator)
-    if type(separator) == "string" then
-        separator = TokenStream(separator)[1]
-    end
+    print(self)
     local results = TokenStreamList()
     local new_tokens = TokenStream()
     local i = 1
     while i <= #self do
         local tok = self[i]
-        if tok.value == separator.value then
+        if tok.value == separator then
             table.insert(results, new_tokens)
             new_tokens = TokenStream()
+            i = i + 2
+        else
+            new_tokens = new_tokens:append(tok)
             i = i + 1
-            tok = self[i]
         end
-        new_tokens = new_tokens:append(tok)
-        i = i + 1
     end
     table.insert(results, new_tokens)
     return results
@@ -274,9 +272,9 @@ function TokenStreamList:join(separator)
     local new_tokens = TokenStream()
     for i, stream in pairs(self) do
         if i > 1 then
-          new_tokens = new_tokens:extend(separator)
+          new_tokens:extend(separator)
         end
-        new_tokens = new_tokens:extend(stream)
+        new_tokens:extend(stream)
     end
     return new_tokens
 end
@@ -284,13 +282,8 @@ end
 function Macro(impl)
     return function(str)
         local tokens = TokenStream(str)
-        local results = {impl(tokens)}
-        results[1] = tostring(results[1])
-        local result = string.format(table.unpack(results))
-        if type(result) == "string" then
-            result = TokenStream(result)
-        end
-        return result
+        local result = string.format(impl(tokens))
+        return TokenStream(result)
     end
 end
 
