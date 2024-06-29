@@ -12,5 +12,4 @@ end)
 
 local add = CLOJURE[[|x, y| x + y]]
 
-print(add._(1, 2))
-
+print(add.expr(1, 2))

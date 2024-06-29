@@ -37,16 +37,16 @@ Quote = setmetatable({
         if type(key) == "number" then
             return rawget(self, "values")[key]
         end
-        if key == "_" or key == "expr" then
+        if key == "_" then
             return expr(self)
-        end
-        if key == "block" then
-            return block(self)
         end
         if rawget(self, key) ~= nil then
             return rawget(self, key)
         end
         return rawget(Quote, key)
+    end,
+    __call = function(self)
+        return block(self)
     end,
     __len = function(self)
         return #self.values
@@ -67,10 +67,17 @@ Quote = setmetatable({
         return iter
     end,
 }, {
-    __call = function(self, str, depth)
-        depth = depth or 1
+    __call = function(self, str, ...)
+        local depth
         if str and type(str) == "string" then
+            str = tokenize(string.format(str, ...))
+            depth = 1
+        elseif type(str) == "number" then
+            depth = str
+            str = ({...})[1]
             str = tokenize(str)
+        else
+            depth = 1
         end
         if str then
             local new_tokens = self()
@@ -198,23 +205,20 @@ function getenv(depth)
         end
         env[name] = value
     end
-    for k, v in pairs(_G) do
-        env[k] = v
-    end
-    return env
+    return setmetatable(_G, { __index = env })
 end
 
 function block(tokens)
     if type(tokens) == "string" then
-        tokens = Quote(tokens, 2)
+        tokens = Quote(2, tokens)
     end
-    local func = load(tostring(tokens), "chunk", "t", getenv(1))
+    local func = load(tostring(tokens), "chunk", "t", tokens.env)
     return func()
 end
 
 function expr(tokens)
     if type(tokens) == "string" then
-        tokens = Quote(tokens, 2)
+        tokens = Quote(2, tokens)
     end
     local func = load("return " .. tostring(tokens), "chunk", "t", tokens.env)
     return func()
@@ -329,7 +333,7 @@ function Quote:prepend(value)
     end
     local new_tokens = Quote:from(self)
     table.insert(new_tokens.values, value)
-    for tok in self do
+    for tok in self:iter() do
         table.insert(new_tokens.values, tok)
     end
     return new_tokens
@@ -343,9 +347,9 @@ function Quote:pop()
     return self[1], new_tokens
 end
 
-function Quote:extend(other)
+function Quote:extend(other, ...)
     if type(other) == "string" then
-        other = Quote(other)
+        other = Quote(string.format(other, ...))
     end
     local new_tokens = Quote:from(self)
     for tok in self:iter() do
@@ -497,20 +501,23 @@ function Quote:segmentize(separator, joiner)
 end
 
 function Quote:take_until(separator)
+    if type(separator) == "string" then
+        separator = Quote(separator)[1]
+    end
     local split = self:split(separator)
     local first = split[1]
     table.remove(split, 1)
-    return first, split:join(separator)
+    return first, split:join(separator):prepend(separator)
 end
 
 function QuoteList:join(separator)
-    if type(separator) == "string" then
-        separator = Quote(separator)
+    if type(separator) == "string" or separator.type then
+        separator = Quote("%s", separator)
     end
     local new_tokens = Quote:from(self)
     for i, stream in pairs(self) do
         if i > 1 then
-          new_tokens = new_tokens:extend(separator)
+            new_tokens = new_tokens:extend(separator)
         end
         new_tokens = new_tokens:extend(stream)
     end
@@ -525,27 +532,54 @@ function QuoteList:map(fn)
     return quote_list
 end
 
+function QuoteList:filter(fn)
+    if not fn then
+        fn = function(quote)
+            return #quote > 0
+        end
+    end
+    local quote_list = QuoteList()
+    for i, quote in pairs(self) do
+        if fn(quote) then
+            table.insert(quote_list, quote)
+        end
+    end
+    return quote_list
+end
+
+function QuoteList:slice(min, max)
+    if not max then
+        max = #self
+    end
+    if max < 0 then
+        max = #self + max + 1
+    end
+    local quote_list = QuoteList()
+    for i = min, max do
+        table.insert(quote_list, self[i])
+    end
+    return quote_list
+end
+
 function Macro(impl)
     return setmetatable({
         expr = function(self, str)
-            local quote = Quote(str, 2)
+            local quote = Quote(2, str)
             return expr(self(quote))
         end,
         block = function(self, str)
-            local quote = Quote(str, 2)
+            local quote = Quote(2, str)
             return block(self(quote))
         end,
     }, {
         __call = function(_, str)
             local tokens = str
             if type(str) == "string" then
-                tokens = Quote(str, 2)
+                tokens = Quote(2, str)
             end
-            local results = {impl(tokens)}
-            results[1] = tostring(results[1])
-            local result = string.format(table.unpack(results))
+            local result = string.format(impl(tokens))
             if type(result) == "string" then
-                result = Quote(result, 2)
+                result = Quote(2, result)
                 result.env = tokens.env
             end
             return result
