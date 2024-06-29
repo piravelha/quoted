@@ -1,13 +1,16 @@
-require("quoted")
+require [[quoted]]
 
-ADD = Macro(function(tokens)
-  local nums = tokens:split[[ , ]]
-  return nums:join[[ + ]]
+CLOJURE = Macro(function(tokens)
+    _, tokens = tokens:expect("|")
+    params, tokens = tokens:take_until("|")
+    return [[
+        (function(%s)
+            return %s
+        end)
+    ]], params, tokens
 end)
 
-local quote = ADD[[1, 2, 3]]
-print(quote)
---> 1 + 2 + 3
-print(expr(quote))
---> 6
+local add = CLOJURE[[|x, y| x + y]]
+
+print(add._(1, 2))
 
