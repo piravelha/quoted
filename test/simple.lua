@@ -1,5 +1,4 @@
 require [[quoted]]
-cls()
 
 local x = Quote[[ 5 ]]
 

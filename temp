@@ -1,3 +1,0 @@
-local x = 3
-local y = 9
-print(x + y)

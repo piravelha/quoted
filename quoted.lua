@@ -55,6 +55,10 @@ function Token:flatmap(fn)
     return quote
 end
 
+function Token:is(value)
+    return self.value == value
+end
+
 function Token:is_name()
     return self.type == "name"
 end
@@ -151,9 +155,6 @@ Quote = setmetatable({
     end,
     __unm = function(self)
         return self:pop()
-    end,
-    __idiv = function(self, other)
-        return self:take_until(other)
     end,
     from = function(self, other)
         local new = self()
@@ -309,7 +310,29 @@ function getenv(depth)
     local env = {
         f = f,
         println = println,
-        id = function(x) return x end,
+        loop = function(quote)
+            local i, quote = quote:expect_name()
+            quote = quote << "do"
+            quote = quote >> "end"
+            return Quote([[
+                for %s in forever do
+                    %s
+                end
+            ]], i, quote)
+        end,
+        select = function(quote)
+            quote = quote << "["
+            local mode, quote = quote:take_until("]")
+            if #mode == 1 and mode[1].value == "#" then
+                mode = Quote([["#"]])[1]
+            end
+            if #quote > 0 then
+                quote = quote:prepend(",")
+            end
+            return Quote([[
+                select(%s %s)
+            ]], mode, quote)
+        end,
     }
     for i = 1, debug.getinfo(1, "l").currentline do
         local name, value = debug.getlocal(depth + 2, i)
@@ -321,6 +344,11 @@ function getenv(depth)
     local __G = {}
     for k, v in pairs(_G) do
         __G[k] = v
+    end
+    for k, v in pairs(original_G) do
+        if __G[k] then
+            __G[k] = nil
+        end
     end
     return setmetatable(__G, { __index = env })
 end
@@ -843,10 +871,11 @@ function Macro(impl)
         __macro = true,
         __call = function(_, str)
             local tokens = str
-            if type(str) == "string" then
-                tokens = Quote(2, str)
-            end
             local env = getenv(1)
+            if type(str) == "string" then
+                tokens = Quote(str)
+                tokens.env = env
+            end
             local result = Quote(impl(tokens))
             result.env = tokens.env
             return result
@@ -947,61 +976,76 @@ function Quote:write(path, env)
     end
 end
 
-function generate(path)
+function generate(path, depth)
+    depth = depth or 0
     return function(quote)
-        local env = getenv(1)
-        if debug.getinfo(2).short_src == arg[0] then
-            if not path then
-                path = debug.getinfo(2).source:sub(2)
-                path = path:gsub("%.lua", "")
-                path = path .. ".out.lua"
-            end
-            quote = Quote(quote)
-            quote:write(path, env)
+        local env = getenv(depth + 1)
+        if not path then
+            path = debug.getinfo(depth + 2).source:sub(2)
+            path = path:gsub("%.lua", "")
+            path = path .. ".out.lua"
         end
+        quote = Quote(quote)
+        quote:write(path, env)
     end
 end
 
-function run(mode)
+function run(mode, depth, original)
+    depth = depth or 0
     return function(quote)
+        original = quote
         quote = Quote(quote)
-        local env = getenv(1)
-        if debug.getinfo(2).short_src == arg[0] then
-            quote = quote:apply_macros(env)
-            if mode == "debug" or mode == "test" then
-                local file = io.open("temp", "w+")
-                file:write(tostring(quote))
-                file:close()
-                os.execute("stylua temp")
-                local file = io.open("temp", "r+")
-                local formatted = file:read("*all")
-                file:close()
-                if mode == "debug" then
-                    print(formatted)
-                elseif mode == "test" then
-                    return formatted
-                end
-                os.remove("temp")
-                return
+        local env = getenv(depth + 1)
+        quote = quote:apply_macros(env)
+        if mode == "debug" or mode == "test" then
+            local file = io.open("temp", "w+")
+            file:write(tostring(quote))
+            file:close()
+            os.execute("stylua temp")
+            local file = io.open("temp", "r+")
+            local formatted = file:read("*all")
+            file:close()
+            os.remove("temp")
+            if mode == "debug" then
+                return print(formatted)
+            elseif mode == "test" then
+                return formatted
             end
-            local func = load(tostring(quote), "chunk", "t", env)
-            func()
         end
+        local func, err = load(tostring(quote), "chunk", "t", _G)
+        if not err then
+            return func()
+        end
+        error(err, 2)
+    end
+end
+
+function execute(path)
+    return function(quote)
+        generate(path, 1)(quote)
+        return run(path)(quote)
     end
 end
 
 function f(quote)
     assert(#quote == 1, "f!() macro only supports a single string token")
-    local str = quote[1]
     local vars = QuoteList()
-    local raw = Quote(str.value:sub(2, -2))
-    raw:pairs(function(index, _)
-        local brace = raw:slice(index):balanced("{", "}")
-        if brace then
-            vars = vars:append(brace:slice(2, -2))
+    local str = quote[1].value
+    for match in str:gmatch("(\\*){") do
+        if #match % 2 == 0 then
+            local raw = Quote(str:sub(2, -2))
+            raw:pairs(function(index, _)
+                local brace = raw:slice(index):balanced("{", "}")
+                if brace then
+                    vars = vars:append(brace:slice(2, -2))
+                end
+            end)
+            str = str:gsub(match .. "%b{}", match .. "%%s")
+        else
+            str = str:gsub(match .. "{", match:sub(2) .. "{")
+            str = str:gsub(match .. "}", match:sub(2) .. "}")
         end
-    end)
-    str = str.value:gsub("%b{}", "%%s")
+    end
     vars = vars:map(function(var)
         return var:prepend(",")
     end)
@@ -1014,6 +1058,49 @@ function println(quote)
     return [[
         print(f!(%s))
     ]], quote
+end
+
+function fn(quote)
+    quote = quote << "("
+    local params, quote = quote:take_until(")")
+    quote = quote << "=>"
+    if quote[1]:is("do") then
+        quote = quote << "do" >> "end"
+        return Quote([[
+            id(function(%s)
+                %s
+            end)
+        ]], params, quote)
+    end
+    return Quote([[
+        (function(%s)
+            return %s
+        end)
+    ]], params, quote)
+end
+
+function breakif(quote)
+    return Quote([[
+        if %s then
+            break
+        end
+    ]], quote)
+end
+
+function id(x)
+    return x
+end
+
+function r(quote)
+    local var, quote = quote:expect_name()
+    local op, quote = quote:expect_special()
+    op = Quote(op.value:sub(1, -2))[1]
+    return Quote([[
+        id(function()
+            %s = %s %s %s
+            return %s
+        end)()
+    ]], var, var, op, quote, var)
 end
 
 function printbold(str)
@@ -1029,5 +1116,20 @@ function trim(str)
 end
 
 function assert_expected(str, expected)
-    assert(trim(str) == trim(expected), "Test failed!", 2)
+    local line = debug.getinfo(2).currentline
+    assert(trim(str) == trim(expected), tostring(line), 2)
+end
+
+local is = {}
+local last
+function forever(_, prev)
+    if last and prev and last >= prev then
+        table.remove(is, #is)
+    end
+    if not prev then
+        table.insert(is, 0)
+    end
+    last = prev
+    is[#is] = is[#is] + 1
+    return is[#is]
 end
