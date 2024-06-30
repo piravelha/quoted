@@ -73,6 +73,9 @@ Quote = setmetatable({
 }, {
     __call = function(self, str, ...)
         local depth
+        if type(str) ~= "nil" then
+            str = tostring(str)
+        end
         if str and type(str) == "string" then
             if #({...}) > 0 then
                 str = tokenize(string.format(str, ...))
@@ -161,15 +164,10 @@ function tokenize(code, file)
             local str = "[["
             i = i + 2
             char = code:sub(i, i)
-            while not char:match("%]") or not code:sub(i+1):match("^\\*%]") do
-                if char == "\\" then
-                    i = i + 1
-                    char = code:sub(i, i)
-                else
-                    str = str .. char
-                    i = i + 1
-                    char = code:sub(i, i)
-                end
+            while not char:match("%]") do
+                str = str .. char
+                i = i + 1
+                char = code:sub(i, i)
             end
             i = i + #code:sub(i+1):match("^\\*%]") + 2
             char = code:sub(i, i)
@@ -191,9 +189,9 @@ function tokenize(code, file)
         elseif char:match("[{}]") then
             i = i + 1
             table.insert(tokens.values, Token(TokenType.Brace, char))
-        elseif char:match("[^%w%s()%[%]{}]") then
+        elseif char:match("[^%w%s()%[%]{}_]") then
             local special = ""
-            while char:match("[^%w%s()%[%]{}]") do
+            while char:match("[^%w%s()%[%]{}_]") do
                 i = i + 1
                 special = special .. char
                 char = code:sub(i, i)
@@ -445,13 +443,16 @@ function Quote:split(separator, deep)
         local paren = self:slice(i):balanced("(", ")")
         local bracket = self:slice(i):balanced("[", "]")
         local brace = self:slice(i):balanced("{", "}")
-        if paren and not deep then
+        if paren and not deep
+        and separator.value ~= "(" and separator.value ~= ")" then
             i = i + #paren
             new_tokens = new_tokens:extend(paren)
-        elseif bracket and not deep then
+        elseif bracket and not deep
+        and separator.value ~= "[" and separator.value ~= "]" then
             i = i + #bracket
             new_tokens = new_tokens:extend(bracket)
-        elseif brace and not deep then
+        elseif brace and not deep
+        and separator.value ~= "{" and separator.value ~= "}" then
             i = i + #brace
             new_tokens = new_tokens:extend(brace)
         else
@@ -475,6 +476,17 @@ end
 
 function Quote:args()
     return self:split(","):unpack()
+end
+
+function Quote:str()
+    local str = tostring(self)
+    str = str:gsub("\\", "\\\\")
+    str = str:gsub("\"", "\\\"")
+    return str
+end
+
+function Quote:repr()
+    return tostring(self)
 end
 
 function Quote:balanced(start, finish)
@@ -519,7 +531,7 @@ function Quote:replace(old, new)
         new = Quote(new)[1]
     end
     local new_tokens = Quote:from(self)
-    for tok in self do
+    for tok in self:iter() do
         if tok.value == old.value then
             new_tokens = new_tokens:append(new)
         else
@@ -531,6 +543,31 @@ end
 
 function Quote:segmentize(separator, joiner)
     return self:split(separator):join(joiner)
+end
+
+function Quote:map(fn)
+    local new = Quote()
+    for token in self:iter() do
+        local result = fn(token)
+        if result.type and result.value then
+            new = new:append(result)
+        else
+            new = new:extend(result)
+        end
+    end
+    return new
+end
+
+function Quote:foreach(fn)
+    for token in self:iter() do
+        fn(token)
+    end
+end
+
+function Quote:pairs(fn)
+    for i, token in self:enumerate() do
+        fn(i, token)
+    end
 end
 
 function Quote:take_until(separator)
@@ -602,8 +639,40 @@ function QuoteList:slice(min, max)
     return quote_list
 end
 
+function QuoteList:append(quote)
+    if type(quote) == "string" then
+        quote = Quote(quote)
+    end
+    local new = QuoteList()
+    for i, v in pairs(self) do
+        table.insert(new, v)
+    end
+    table.insert(new, quote)
+    return new
+end
+
+function QuoteList:contains(quote)
+    if type(quote) == "string" then
+        quote = Quote(quote)
+    end
+    for i, v in pairs(self) do
+        if tostring(v) == tostring(quote) then
+            return true
+        end
+    end
+    return false
+end
+
 function QuoteList:unpack()
     return table.unpack(self)
+end
+
+function QuoteList:reverse()
+    local new = QuoteList()
+    for i = #self, 1, -1 do
+        table.insert(new, self[i])
+    end
+    return new
 end
 
 function Macro(impl)
@@ -623,13 +692,9 @@ function Macro(impl)
             if type(str) == "string" then
                 tokens = Quote(2, str)
             end
-            local values = {impl(tokens)}
-            values[1] = tostring(values[1])
-            local result = string.format(table.unpack(values))
-            if type(result) == "string" then
-                result = Quote(2, result)
-                result.env = tokens.env
-            end
+            local env = getenv(1)
+            local result = Quote(impl(tokens))
+            result.env = tokens.env
             return result
         end,
     })
@@ -691,17 +756,24 @@ function Quote:apply_macros(env)
     return new_quote
 end
 
-function Quote:write(path)
-    self = self:apply_macros(getenv(1))
+function Quote:write(path, env)
+    self = self:apply_macros(env)
     local file = io.open(path, "w+")
     if file then
         file:write(tostring(self))
     end
     file:close()
-    local handle = io.popen("luafmt --version")
+    local handle = io.popen("stylua --version")
     local result = handle:read("*a")
     handle:close()
     if result and result ~= "" then
-        os.execute("luafmt -w replace " .. path)
+        os.execute("stylua " .. path)
+    end
+end
+
+function program(path, quote)
+    local env = getenv(1)
+    if debug.getinfo(2).short_src == arg[0] then
+        Quote(quote):write(path, env)
     end
 end

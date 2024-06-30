@@ -1,28 +1,30 @@
-require [[quoted]]
+require("quoted")
 
-ENUM = Macro(function(tokens)
-    local name, tokens = tokens:expect_type("name")
+function enum(tokens)
+    local name, tokens = tokens:expect_type(TokenType.Name)
     _, tokens = tokens:expect("{")
     _, tokens = tokens:expect_last("}")
-    names = tokens:split(","):filter()
+    fields = tokens:split(","):filter()
     local iota = 0
-    values = names:map(function(n)
+    body = fields:map(function(n)
         iota = iota + 1
-        return n:extend(" = %d", iota)
+        return n:extend([[= %d]], iota)
     end):join(",")
-    return [[
-        %s = setmetatable({ %s }, {
+    return Quote([[
+        local %s = setmetatable({ %s }, {
             __tostring = function(_)
                 return "%s"
             end,
         })
-    ]], name, values, name
-end)
+    ]], name, body, name)
+end
 
-ENUM[[Fruit {
-    Apple,
-    Banana,
-    Grape,
-}]]()
-
-print(Fruit.Apple)
+Quote[[
+    enum!(Fruit {
+        Apple,
+        Banana,
+        Grape,
+        Orange,
+    })
+    print(Fruit.Orange)
+]]:write("out/enum.lua")

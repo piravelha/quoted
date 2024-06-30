@@ -1,13 +1,10 @@
 local add = (function(x, y)
-    return (function()
-        print(string.format("add called with arguments '%s' and '%s'", x, y))
-        return x + y
-    end)()
+    return x + y
 end)
 print(
     add(
         1,
-        (function(x)
+        (function(x, y)
             return x
         end)(2)
     )
