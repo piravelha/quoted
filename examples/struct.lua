@@ -2,21 +2,17 @@ require [[quoted]]
 
 STRUCT = Macro(function(tokens)
     local name, tokens = tokens:expect_type("name")
-    _, tokens = tokens:expect(":")
+    _, tokens = tokens:expect("=")
     local fields = tokens:split(","):filter()
     local i = 0
     local values = fields:map(function(f)
         i = i + 1
-        return Quote(f, "= params[", i, "]")
+        return Quote("%s = params[%d]", f, i)
     end):join(",")
-    return [[
-        %s = function(params)
-            return { %s }
-        end
-  ]], name, values, name
+    return [[ %s = function(params) return { %s } end ]], name, values
 end)
 
-STRUCT[[Person:
+STRUCT[[Person =
     name,
     age,
 ]]()

@@ -38,7 +38,11 @@ Quote = setmetatable({
             return rawget(self, "values")[key]
         end
         if key == "_" then
-            return expr(self)
+            local ok, result = pcall(expr, self)
+            if not ok then
+                error(result:gsub("^.-:%d+: ", ""), 2)
+            end
+            return result
         end
         if rawget(self, key) ~= nil then
             return rawget(self, key)
@@ -70,7 +74,11 @@ Quote = setmetatable({
     __call = function(self, str, ...)
         local depth
         if str and type(str) == "string" then
-            str = tokenize(string.format(str, ...))
+            if #({...}) > 0 then
+                str = tokenize(string.format(str, ...))
+            else
+                str = tokenize(str)
+            end
             depth = 1
         elseif type(str) == "number" then
             depth = str
@@ -205,14 +213,22 @@ function getenv(depth)
         end
         env[name] = value
     end
-    return setmetatable(_G, { __index = env })
+    local __G = {}
+    for k, v in pairs(_G) do
+        __G[k] = v
+    end
+    return setmetatable(__G, { __index = env })
 end
 
 function block(tokens)
     if type(tokens) == "string" then
         tokens = Quote(2, tokens)
     end
-    local func = load(tostring(tokens), "chunk", "t", tokens.env)
+    local func, err = load(tostring(tokens), "chunk", "t", tokens.env)
+    if not func then
+        print("syntax error on the following quote:\n" .. tostring(tokens))
+        error(err)
+    end
     return func()
 end
 
@@ -220,7 +236,17 @@ function expr(tokens)
     if type(tokens) == "string" then
         tokens = Quote(2, tokens)
     end
-    local func = load("return " .. tostring(tokens), "chunk", "t", tokens.env)
+    if #tokens == 1 and tokens[1].type == "name"
+    and tokens[1].value ~= "true"
+    and tokens[1].value ~= "false"
+    and tokens[1].value ~= "nil" then
+        error("Attempting to evaluate not compile-time known value: '" .. tokens[1].value .. "'")
+    end
+    local func, err = load("return " .. tostring(tokens), "chunk", "t", tokens.env)
+    if not func then
+        print("syntax error on the following quote:\n" .. tostring(tokens))
+        error(err)
+    end
     return func()
 end
 
@@ -307,7 +333,7 @@ function Quote:contains(token)
     if type(token) == "string" then
         token = Quote(token)[1]
     end
-    for tok in self do
+    for tok in self:iter() do
         if tok.type == token.type and tok.value == token.value then
             return true
         end
@@ -447,12 +473,19 @@ function Quote:split(separator, deep)
     return results
 end
 
+function Quote:args()
+    return self:split(","):unpack()
+end
+
 function Quote:balanced(start, finish)
     if type(start) == "string" then
         start = Quote(start)[1]
     end
     if type(finish) == "string" then
         finish = Quote(finish)[1]
+    end
+    if #self == 0 then
+        return
     end
     if self[1].value ~= start.value then
         return nil, self
@@ -510,6 +543,14 @@ function Quote:take_until(separator)
     return first, split:join(separator):prepend(separator)
 end
 
+function Quote:rep(num)
+    local quote_list = QuoteList()
+    for i = 1, num do
+        table.insert(quote_list, self)
+    end
+    return quote_list:join("")
+end
+
 function QuoteList:join(separator)
     if type(separator) == "string" or separator.type then
         separator = Quote("%s", separator)
@@ -561,6 +602,10 @@ function QuoteList:slice(min, max)
     return quote_list
 end
 
+function QuoteList:unpack()
+    return table.unpack(self)
+end
+
 function Macro(impl)
     return setmetatable({
         expr = function(self, str)
@@ -572,12 +617,15 @@ function Macro(impl)
             return block(self(quote))
         end,
     }, {
+        __macro = true,
         __call = function(_, str)
             local tokens = str
             if type(str) == "string" then
                 tokens = Quote(2, str)
             end
-            local result = string.format(impl(tokens))
+            local values = {impl(tokens)}
+            values[1] = tostring(values[1])
+            local result = string.format(table.unpack(values))
             if type(result) == "string" then
                 result = Quote(2, result)
                 result.env = tokens.env
@@ -585,4 +633,75 @@ function Macro(impl)
             return result
         end,
     })
+end
+
+function Quote:apply_macros(env)
+    local calls = {}
+    for i, tok in self:enumerate() do
+        if tok.type == "name" then
+            if self[i+1] and self[i+1].value == "!" then
+                local args = self:slice(i+2):balanced("(", ")")
+                    or self:slice(i+2):balanced("[", "]")
+                    or self:slice(i+2):balanced("{", "}")
+                args = args:apply_macros(env)
+                if args then
+                    table.insert(calls, {tok, args:slice(2, -2), i})
+                end
+            end
+        end
+        ::continue::
+    end
+    local replaced = {}
+    for _, call in pairs(calls) do
+        local name, args, i = table.unpack(call)
+        if env[name.value] then
+            local value = Macro(env[name.value])(args)
+            if #value ~= 1 or value[1].value ~= "nil" then
+                table.insert(replaced, {
+                    value,
+                    i,
+                })
+            end
+        end
+    end
+    local new_quote = Quote()
+    local i = 1
+    while i <= #self do
+        for _, rep in pairs(replaced) do
+            local value, j = table.unpack(rep)
+            if i == j then
+                i = i + 2
+                local args = self:slice(i):balanced("(", ")")
+                    or self:slice(i):balanced("[", "]")
+                    or self:slice(i):balanced("{", "}")
+                if not args then
+                    i = i - 2
+                    new_quote = new_quote:extend(value)
+                    goto continue
+                end
+                i = i + #args - 1
+                new_quote = new_quote:extend(value)
+                goto continue
+            end
+        end
+        new_quote = new_quote:append(self[i])
+        ::continue::
+        i = i + 1
+    end
+    return new_quote
+end
+
+function Quote:write(path)
+    self = self:apply_macros(getenv(1))
+    local file = io.open(path, "w+")
+    if file then
+        file:write(tostring(self))
+    end
+    file:close()
+    local handle = io.popen("luafmt --version")
+    local result = handle:read("*a")
+    handle:close()
+    if result and result ~= "" then
+        os.execute("luafmt -w replace " .. path)
+    end
 end
