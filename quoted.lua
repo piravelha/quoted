@@ -12,9 +12,18 @@ TokenType = {
     Bracket = "bracket",
     Brace = "brace",
     Special = "special",
+    Delimiter = "delimiiter",
 }
 
 Token = setmetatable({
+    name = "name",
+    number = "number",
+    string = "string",
+    paren = "paren",
+    bracket = "bracket",
+    brace = "brace",
+    special = "special",
+    delimiter = "delimiter",
     __tostring = function(self)
         return tostring(self.value)
     end,
@@ -26,6 +35,71 @@ Token = setmetatable({
         return token
     end,
 })
+Token.__index = Token
+
+function Token:map(fn)
+    local value = ""
+    for i = 1, #self.value do
+        local char = self.value:sub(i, i)
+        value = value .. fn(char)
+    end
+    return Token(self.type, value)
+end
+
+function Token:flatmap(fn)
+    local quote = Quote()
+    for i = 1, #self.value do
+        local char = self.value:sub(i, i)
+        quote = quote:extend(Quote(fn(char)))
+    end
+    return quote
+end
+
+function Token:is_name()
+    return self.type == "name"
+end
+
+function Token:is_number()
+    return self.type == "number"
+end
+
+function Token:is_string()
+    return self.type == "string"
+end
+
+function Token:is_special()
+    return self.type == "special"
+end
+
+function Token:is_paren()
+    return self.type == "paren"
+end
+
+function Token:is_bracket()
+    return self.type == "bracket"
+end
+
+function Token:is_brace()
+    return self.type == "brace"
+end
+
+function Token:assert_is(...)
+    local types = {...}
+    local str = ""
+    for i, type in pairs(types) do
+        if i > 1 and i < #types then
+            str = str .. ", "
+        end
+        if i == #types then
+            str = str .. " or "
+        end
+        str = str .. type
+        if self.type == type then
+            return
+        end
+    end
+    error("Expected one of " .. str .. ", but got " .. self.type .. " instead", 2)
+end
 
 Quote = setmetatable({
     __tostring = function(self)
@@ -59,6 +133,27 @@ Quote = setmetatable({
     end,
     __len = function(self)
         return #self.values
+    end,
+    __add = function(self, other)
+        return self:append(other)
+    end,
+    __concat = function(self, other)
+        return self:extend(other)
+    end,
+    __shl = function(self, value)
+        return self:expect(value)
+    end,
+    __shr = function(self, value)
+        return self:expect_last(value)
+    end,
+    __mul = function(self, num)
+        return self:rep(num)
+    end,
+    __unm = function(self)
+        return self:pop()
+    end,
+    __idiv = function(self, other)
+        return self:take_until(other)
     end,
     from = function(self, other)
         local new = self()
@@ -157,7 +252,7 @@ function tokenize(code, file)
             local str = "\""
             i = i + 1
             char = code:sub(i, i)
-            while not char:match("\"") do
+            while not char:match("\"") and i <= #code do
                 str = str .. char
                 i = i + 1
                 char = code:sub(i, i)
@@ -194,9 +289,12 @@ function tokenize(code, file)
         elseif char:match("[{}]") then
             i = i + 1
             table.insert(tokens.values, Token(TokenType.Brace, char))
-        elseif char:match("[^%w%s()%[%]{}_]") then
+        elseif char:match("[;,]") then
+            i = i + 1
+            table.insert(tokens.values, Token("delimiter", char))
+        elseif char:match("[^%w%s()%[%]{}_,;\"]") then
             local special = ""
-            while char:match("[^%w%s()%[%]{}_]") do
+            while char:match("[^%w%s()%[%]{}_,;\"]") do
                 i = i + 1
                 special = special .. char
                 char = code:sub(i, i)
@@ -209,7 +307,9 @@ end
 
 function getenv(depth)
     local env = {
-        F = F,
+        f = f,
+        println = println,
+        id = function(x) return x end,
     }
     for i = 1, debug.getinfo(1, "l").currentline do
         local name, value = debug.getlocal(depth + 2, i)
@@ -422,12 +522,42 @@ function Quote:expect_last(value)
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
 
-function Quote:expect_type(type)
+function Quote:expect_type(...)
     local popped, tokens = self:pop()
-    if popped.type == type then
-        return popped, tokens
-    end
-    error(string.format("Expected '%s', got '%s'", type, popped))
+    popped:assert_is(...)
+    return popped, tokens
+end
+
+function Quote:expect_name(type)
+    return self:expect_type("name")
+end
+
+function Quote:expect_number(type)
+    return self:expect_type("number")
+end
+
+function Quote:expect_paren(type)
+    return self:expect_type("paren")
+end
+
+function Quote:expect_bracket(type)
+    return self:expect_type("bracket")
+end
+
+function Quote:expect_brace(type)
+    return self:expect_type("brace")
+end
+
+function Quote:expect_special(type)
+    return self:expect_type("special")
+end
+
+function Quote:expect_delimiter(type)
+    return self:expect_type("delimiter")
+end
+
+function Quote:expect_string(type)
+    return self:expect_type("string")
 end
 
 function Quote:expect_last_type(type)
@@ -519,6 +649,9 @@ function Quote:balanced(start, finish)
         end
         if tok.value == finish.value then
             counter = counter - 1
+            if start.value == finish.value then
+                counter = counter - 2
+            end
         end
         if counter <= 0 then
             new_tokens = new_tokens:append(tok)
@@ -593,6 +726,14 @@ function Quote:rep(num)
         table.insert(quote_list, self)
     end
     return quote_list:join("")
+end
+
+function Quote:tolist()
+    local quote_list = QuoteList()
+    for token in self:iter() do
+        quote_list = quote_list:append(Quote(token))
+    end
+    return quote_list
 end
 
 function QuoteList:join(separator)
@@ -724,8 +865,14 @@ function Quote:apply_macros(env)
                 if args then
                     args = args:apply_macros(env)
                     table.insert(calls, {tok, args:slice(2, -2), i})
+                elseif self[i+2]:is_string() then
+                    table.insert(calls, {
+                        tok, Quote(self[i+2]), i
+                    })
+                    i = i + 3
+                    goto continue
                 else
-                    table.insert(calls, {tok, QuoteList(), i})
+                    table.insert(calls, {tok, Quote(), i})
                 end
             end
         end
@@ -745,8 +892,10 @@ function Quote:apply_macros(env)
                     })
                 end
             else
+                local value = env[name.value]
+                value = value:apply_macros(env)
                 table.insert(replaced, {
-                    env[name.value],
+                    value,
                     i,
                 })
             end
@@ -763,6 +912,10 @@ function Quote:apply_macros(env)
                     or self:slice(i):balanced("[", "]")
                     or self:slice(i):balanced("{", "}")
                 if not args then
+                    if self[i]:is_string() then
+                        new_quote = new_quote:append(value)
+                        goto continue
+                    end
                     i = i - 1
                     new_quote = new_quote:extend(value)
                     goto continue
@@ -798,12 +951,47 @@ function generate(path)
     return function(quote)
         local env = getenv(1)
         if debug.getinfo(2).short_src == arg[0] then
-            Quote(quote):write(path, env)
+            if not path then
+                path = debug.getinfo(2).source:sub(2)
+                path = path:gsub("%.lua", "")
+                path = path .. ".out.lua"
+            end
+            quote = Quote(quote)
+            quote:write(path, env)
         end
     end
 end
 
-function F(quote)
+function run(mode)
+    return function(quote)
+        quote = Quote(quote)
+        local env = getenv(1)
+        if debug.getinfo(2).short_src == arg[0] then
+            quote = quote:apply_macros(env)
+            if mode == "debug" or mode == "test" then
+                local file = io.open("temp", "w+")
+                file:write(tostring(quote))
+                file:close()
+                os.execute("stylua temp")
+                local file = io.open("temp", "r+")
+                local formatted = file:read("*all")
+                file:close()
+                if mode == "debug" then
+                    print(formatted)
+                elseif mode == "test" then
+                    return formatted
+                end
+                os.remove("temp")
+                return
+            end
+            local func = load(tostring(quote), "chunk", "t", env)
+            func()
+        end
+    end
+end
+
+function f(quote)
+    assert(#quote == 1, "f!() macro only supports a single string token")
     local str = quote[1]
     local vars = QuoteList()
     local raw = Quote(str.value:sub(2, -2))
@@ -820,4 +1008,26 @@ function F(quote)
     return [[
         string.format(%s %s)
     ]], str, vars:join("")
+end
+
+function println(quote)
+    return [[
+        print(f!(%s))
+    ]], quote
+end
+
+function printbold(str)
+    print("\27[1m" .. str .. "\27[0m")
+end
+
+function cls()
+    os.execute("cls")
+end
+
+function trim(str)
+    return str:gsub("^%s*", ""):gsub("%s*$", "")
+end
+
+function assert_expected(str, expected)
+    assert(trim(str) == trim(expected), "Test failed!", 2)
 end
