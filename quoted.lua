@@ -1,3 +1,8 @@
+local original_G = {}
+
+for k, v in pairs(_G) do
+    original_G[k] = v
+end
 
 TokenType = {
     Name = "name",
@@ -203,7 +208,9 @@ function tokenize(code, file)
 end
 
 function getenv(depth)
-    local env = {}
+    local env = {
+        F = F,
+    }
     for i = 1, debug.getinfo(1, "l").currentline do
         local name, value = debug.getlocal(depth + 2, i)
         if not name then
@@ -402,7 +409,7 @@ end
 function Quote:expect(value)
     local popped, tokens = self:pop()
     if popped.value == value then
-        return popped, tokens
+        return tokens, popped
     end
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
@@ -410,7 +417,7 @@ end
 function Quote:expect_last(value)
     local popped, tokens = self:remove(#self)
     if popped.value == value then
-        return popped, tokens
+        return tokens, popped
     end
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
@@ -541,7 +548,7 @@ function Quote:replace(old, new)
     return new_tokens
 end
 
-function Quote:segmentize(separator, joiner)
+function Quote:splitjoin(separator, joiner)
     return self:split(separator):join(joiner)
 end
 
@@ -577,7 +584,7 @@ function Quote:take_until(separator)
     local split = self:split(separator)
     local first = split[1]
     table.remove(split, 1)
-    return first, split:join(separator):prepend(separator)
+    return first, split:join(separator)
 end
 
 function Quote:rep(num)
@@ -608,6 +615,12 @@ function QuoteList:map(fn)
         table.insert(quote_list, fn(quote))
     end
     return quote_list
+end
+
+function QuoteList:foreach(fn)
+    for i, quote in pairs(self) do
+        fn(quote)
+    end
 end
 
 function QuoteList:filter(fn)
@@ -708,9 +721,11 @@ function Quote:apply_macros(env)
                 local args = self:slice(i+2):balanced("(", ")")
                     or self:slice(i+2):balanced("[", "]")
                     or self:slice(i+2):balanced("{", "}")
-                args = args:apply_macros(env)
                 if args then
+                    args = args:apply_macros(env)
                     table.insert(calls, {tok, args:slice(2, -2), i})
+                else
+                    table.insert(calls, {tok, QuoteList(), i})
                 end
             end
         end
@@ -720,10 +735,18 @@ function Quote:apply_macros(env)
     for _, call in pairs(calls) do
         local name, args, i = table.unpack(call)
         if env[name.value] then
-            local value = Macro(env[name.value])(args)
-            if #value ~= 1 or value[1].value ~= "nil" then
+            if type(env[name.value]) == "function" then
+                local value = Macro(env[name.value])(args)
+                value = value:apply_macros(env)
+                if #value ~= 1 or value[1].value ~= "nil" then
+                    table.insert(replaced, {
+                        value,
+                        i,
+                    })
+                end
+            else
                 table.insert(replaced, {
-                    value,
+                    env[name.value],
                     i,
                 })
             end
@@ -740,7 +763,7 @@ function Quote:apply_macros(env)
                     or self:slice(i):balanced("[", "]")
                     or self:slice(i):balanced("{", "}")
                 if not args then
-                    i = i - 2
+                    i = i - 1
                     new_quote = new_quote:extend(value)
                     goto continue
                 end
@@ -771,9 +794,30 @@ function Quote:write(path, env)
     end
 end
 
-function program(path, quote)
-    local env = getenv(1)
-    if debug.getinfo(2).short_src == arg[0] then
-        Quote(quote):write(path, env)
+function generate(path)
+    return function(quote)
+        local env = getenv(1)
+        if debug.getinfo(2).short_src == arg[0] then
+            Quote(quote):write(path, env)
+        end
     end
+end
+
+function F(quote)
+    local str = quote[1]
+    local vars = QuoteList()
+    local raw = Quote(str.value:sub(2, -2))
+    raw:pairs(function(index, _)
+        local brace = raw:slice(index):balanced("{", "}")
+        if brace then
+            vars = vars:append(brace:slice(2, -2))
+        end
+    end)
+    str = str.value:gsub("%b{}", "%%s")
+    vars = vars:map(function(var)
+        return var:prepend(",")
+    end)
+    return [[
+        string.format(%s %s)
+    ]], str, vars:join("")
 end
