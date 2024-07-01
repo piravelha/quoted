@@ -1032,7 +1032,7 @@ function execute(path)
     return function(quote)
         path = get_path(0)
         generate(path, 1)(quote)
-        os.execute("lua5.3 " .. path)
+        os.execute("lua54 " .. path)
     end
 end
 
@@ -1112,4 +1112,9 @@ function r(quote)
     ]], var, var, op, quote, var)
 end
 
-
+function set(quote)
+    local var, func = quote:take_until(":=")
+    return Quote([[
+        %s = %s(%s)
+    ]], var, func, var)
+end

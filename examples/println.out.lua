@@ -11,5 +11,4 @@ table.remove({
 	end,
 })()
 z = z * z
-z = z * z
-print(string.format("Result: %s", z))
+z = print(string.format("Result: %s", z))
