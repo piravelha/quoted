@@ -151,10 +151,11 @@ function getenv(depth)
         __G[k] = nil
       end
     end
-    return setmetatable(__G, { __index = env })
+    for k, v in pairs(env) do
+        __G[k] = v
+    end
+    return __G
 end
-
-
 
 Quote = setmetatable({
     __tostring = function(self)
@@ -223,21 +224,16 @@ Quote = setmetatable({
         return iter
     end,
 }, {
-    __call = function(self, str, ...)
+    __call = function(self, str)
         local depth
         if type(str) ~= "nil" then
             str = tostring(str)
         end
         if str and type(str) == "string" then
-            if #({...}) > 0 then
-                str = tokenize(string.format(str, ...))
-            else
-                str = tokenize(str)
-            end
+            str = tokenize(str)
             depth = 1
         elseif type(str) == "number" then
             depth = str
-            str = ({...})[1]
             str = tokenize(str)
         else
             depth = 1
@@ -277,6 +273,22 @@ local QuoteList = setmetatable({
     end,
 })
 QuoteList.__index = QuoteList
+
+function format(str)
+    return function(mappings)
+        function replace_placeholder(str)
+            str = str:gsub("%${(%w+)}", function(match)
+                if mappings[match] then
+                    return tostring(mappings[match])
+                end
+                return "${" .. match .. "}"
+            end)
+            return str
+        end
+        str = replace_placeholder(str)
+        return str
+    end
+end
 
 function tokenize(code, file)
     local tokens = Quote()
@@ -344,9 +356,12 @@ function tokenize(code, file)
         elseif char:match("[;,]") then
             i = i + 1
             table.insert(tokens.values, Token("delimiter", char))
-        elseif char:match("[^%w%s()%[%]{}_,;\"]") then
+        elseif char:match("[!]") then
+            i = i + 1
+            table.insert(tokens.values, Token("special", char))
+        elseif char:match("[^%w%s()%[%]{}_,;\"!]") then
             local special = ""
-            while char:match("[^%w%s()%[%]{}_,;\"]") do
+            while char:match("[^%w%s()%[%]{}_,;\"!]") do
                 i = i + 1
                 special = special .. char
                 char = code:sub(i, i)
@@ -373,13 +388,14 @@ function expr(tokens)
     if type(tokens) == "string" then
         tokens = Quote(2, tokens)
     end
+    tokens = tokens:apply_macros(tokens.env)
     if #tokens == 1 and tokens[1].type == "name"
     and tokens[1].value ~= "true"
     and tokens[1].value ~= "false"
     and tokens[1].value ~= "nil" then
         error("Attempting to evaluate not compile-time known value: '" .. tokens[1].value .. "'")
     end
-    local func, err = load("return " .. tostring(tokens), "chunk", "t", tokens.env)
+    local func, err = load("require(\"quoted_lib\") return " .. tostring(tokens), "chunk", "t", setmetatable(_G, { __index = tokens.env }))
     if not func then
         print("syntax error on the following quote:\n" .. tostring(tokens))
         error(err)
@@ -510,6 +526,10 @@ function Quote:pop()
     return self[1], new_tokens
 end
 
+function Quote:peek_value()
+    return self[1].value
+end
+
 function Quote:extend(other, ...)
     if type(other) == "string" then
         other = Quote(string.format(other, ...))
@@ -541,7 +561,15 @@ end
 function Quote:expect(value)
     local popped, tokens = self:pop()
     if popped.value == value then
-        return tokens, popped
+        return popped, tokens
+    end
+    error(string.format("Expected '%s', got '%s'", value, popped))
+end
+
+function Quote:consume(value)
+    local popped, tokens = self:pop()
+    if popped.value == value then
+        return tokens
     end
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
@@ -915,7 +943,10 @@ function Quote:apply_macros(env)
         local name, args, i = table.unpack(call)
         if env[name.value] then
             if type(env[name.value]) == "function" then
-                local value = Macro(env[name.value])(args)
+                args.env = env
+                local quote, mappings = env[name.value](args)
+                local value = Quote(format(quote)(mappings))
+                value.env = env
                 value = value:apply_macros(env)
                 if #value ~= 1 or value[1].value ~= "nil" then
                     table.insert(replaced, {
@@ -968,7 +999,7 @@ function Quote:write(path, env)
     self = self:apply_macros(env)
     local file = io.open(path, "w+")
     if file then
-        file:write("require [[quoted_lib]]\n" .. tostring(self))
+        file:write("\nrequire \"quoted_lib\"\n\n" .. tostring(self))
     end
     file:close()
     local handle = io.popen("stylua --version")
@@ -1037,16 +1068,21 @@ function execute(path)
 end
 
 todo = Quote [=[
-  error("TODO!")
+    error("TODO!")
 ]=]
 
 function f(quote)
-    assert(#quote == 1, "f!() macro only supports a single string token")
+    local original = quote
+    quote = quote:append(")")
+    quote = quote:prepend("("):prepend("repr")
     local vars = QuoteList()
-    local str = quote[1].value
+    if type(expr(original)) ~= "string" then
+        return [[${quote}]], {quote = quote}
+    end
+    local str = expr(quote)
     for match in str:gmatch("(\\*){") do
         if #match % 2 == 0 then
-            local raw = Quote(str:sub(2, -2))
+            local raw = Quote(str)
             raw:pairs(function(index, _)
                 local brace = raw:slice(index):balanced("{", "}")
                 if brace then
@@ -1061,16 +1097,19 @@ function f(quote)
     end
     vars = vars:map(function(var)
         return var:prepend(",")
-    end)
+    end):join("")
     return [[
-        string.format(%s %s)
-    ]], str, vars:join("")
+        string.format("${str}" ${vars})
+    ]], {
+        str = str,
+        vars = vars,
+    }
 end
 
 function println(quote)
     return [[
-        print(f!(%s))
-    ]], quote
+        print(f!(${quote}))
+    ]], { quote = quote }
 end
 
 function fn(quote)
@@ -1079,42 +1118,83 @@ function fn(quote)
     quote = quote << "=>"
     if quote[1]:is("do") then
         quote = quote << "do" >> "end"
-        return Quote([[
-            table.remove({function(%s)
-                %s
+        return Quote [=[
+            table.remove({function({params})
+                {quote}
             end})
-        ]], params, quote)
+        ]=]
     end
-    return Quote([[
-        (function(%s)
-            return %s
+    return Quote [=[
+        (function({params})
+            return {quote}
         end)
-    ]], params, quote)
+    ]=]
 end
 
 function breakif(quote)
-    return Quote([[
-        if %s then
+    return Quote [=[
+        if ${quote} then
             break
         end
-    ]], quote)
+    ]=]
 end
 
 function r(quote)
     local var, quote = quote:expect_name()
     local op, quote = quote:expect_special()
     op = Quote(op.value:sub(1, -2))[1]
-    return Quote([[
+    return Quote [=[
         table.remove({function()
-            %s = %s %s %s
-            return %s
+            ${var} = ${var} ${op} ${quote}
+            return ${var}
         end})()
-    ]], var, var, op, quote, var)
+    ]=]
 end
 
 function set(quote)
     local var, func = quote:take_until(":=")
-    return Quote([[
-        %s = %s(%s)
-    ]], var, func, var)
+    return Quote [=[
+        ${var} = ${func}(${var})
+    ]=]
+end
+
+function concat(quote)
+    local args = quote:split("..")
+    local str = ""
+    args:foreach(function(arg)
+        arg = expr(arg)
+        str = str .. tostring(arg)
+    end)
+    return [=["${str}"]=], {str = str}
+end
+
+function trim(quote)
+    str = expr(quote)
+    return [=[
+        ((${quote}):gsub("^%s*(.-)%s*$", "%1"))
+    ]=], {quote = quote}
+end
+
+function read(quote)
+    local scope = ""
+    if quote:peek_value() == "local" then
+        _, quote = quote:pop()
+        scope = "local"
+    end
+    local var, quote = quote:expect_name()
+    quote = quote:consume("<=")
+    local path, quote = quote:expect_string()
+    return [=[
+        ${scope} ${var} = (function()
+            local file = io.open(${path}, "r")
+            if not file then return nil end
+            local content = file:read("*all")
+            file:close()
+            return content
+        end)()
+    ]=], {
+        scope = scope,
+        var = var,
+        path = path,
+    }
 end

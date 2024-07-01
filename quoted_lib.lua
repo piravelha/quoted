@@ -33,4 +33,28 @@ function id(x)
     return x
 end
 
-
+function repr(object)
+    if type(object) == "table" then
+        if getmetatable(object)
+        and getmetatable(object).__tostring then
+            return tostring(object)
+        end
+        local str = "{"
+        local i = 1
+        for k, v in pairs(object) do
+            if i > 1 then
+                str = str .. ", "
+            end
+            if type(k) == "number" then
+                str = str .. tostring(v)
+            else
+                str = str .. "["
+                    .. tostring(k) .. "] = "
+                    .. tostring(v)
+            end
+            i = i + 1
+        end
+        return str .. "}"
+    end
+    return tostring(object)
+end

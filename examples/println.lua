@@ -1,9 +1,11 @@
 
 require [[quoted]]
 
-execute() [=[
-    local greet = [[quoted]]
-    println!("Hello, {greet}!")
+run() [=[
+    local quoted = "lua macros"
+    println!("I ❤ {quoted}!")
+    --> I ❤ lua macros!
 ]=]
+
 
 
