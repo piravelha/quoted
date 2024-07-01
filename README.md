@@ -1,1 +1,1 @@
-![quoted demonstration](https://imgur.com/a/i8Lha1Z)
+![quoted demonstration](https://i.imgur.com/6B4KiDZ.png)
