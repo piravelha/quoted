@@ -4,7 +4,9 @@ for k, v in pairs(_G) do
     original_G[k] = v
 end
 
-TokenType = {
+local tokenize
+
+local TokenType = {
     Name = "name",
     Number = "number",
     String = "string",
@@ -104,6 +106,55 @@ function Token:assert_is(...)
     end
     error("Expected one of " .. str .. ", but got " .. self.type .. " instead", 2)
 end
+
+function getenv(depth)
+    local env = {
+        f = f,
+        println = println,
+        loop = function(quote)
+            local i, quote = quote:expect_name()
+            quote = quote << "do"
+            quote = quote >> "end"
+            return Quote([[
+                for %s in forever do
+                    %s
+                end
+            ]], i, quote)
+        end,
+        select = function(quote)
+            quote = quote << "["
+            local mode, quote = quote:take_until("]")
+            if #mode == 1 and mode[1].value == "#" then
+                mode = Quote([["#"]])[1]
+            end
+            if #quote > 0 then
+                quote = quote:prepend(",")
+            end
+            return Quote([[
+                select(%s %s)
+            ]], mode, quote)
+        end,
+    }
+    for i = 1, debug.getinfo(1, "l").currentline do
+        local name, value = debug.getlocal(depth + 2, i)
+        if not name then
+            break
+        end
+        env[name] = value
+    end
+    local __G = {}
+    for k, v in pairs(_G) do
+        __G[k] = v
+    end
+    for k, v in pairs(__G) do
+      if original_G[k] then
+        __G[k] = nil
+      end
+    end
+    return setmetatable(__G, { __index = env })
+end
+
+
 
 Quote = setmetatable({
     __tostring = function(self)
@@ -206,7 +257,7 @@ Quote = setmetatable({
     end,
 })
 
-QuoteList = setmetatable({
+local QuoteList = setmetatable({
     __tostring = function(self)
         local str = "{"
         for i, stream in pairs(self) do
@@ -304,53 +355,6 @@ function tokenize(code, file)
         end
     end
     return tokens
-end
-
-function getenv(depth)
-    local env = {
-        f = f,
-        println = println,
-        loop = function(quote)
-            local i, quote = quote:expect_name()
-            quote = quote << "do"
-            quote = quote >> "end"
-            return Quote([[
-                for %s in forever do
-                    %s
-                end
-            ]], i, quote)
-        end,
-        select = function(quote)
-            quote = quote << "["
-            local mode, quote = quote:take_until("]")
-            if #mode == 1 and mode[1].value == "#" then
-                mode = Quote([["#"]])[1]
-            end
-            if #quote > 0 then
-                quote = quote:prepend(",")
-            end
-            return Quote([[
-                select(%s %s)
-            ]], mode, quote)
-        end,
-    }
-    for i = 1, debug.getinfo(1, "l").currentline do
-        local name, value = debug.getlocal(depth + 2, i)
-        if not name then
-            break
-        end
-        env[name] = value
-    end
-    local __G = {}
-    for k, v in pairs(_G) do
-        __G[k] = v
-    end
-    for k, v in pairs(original_G) do
-        if __G[k] then
-            __G[k] = nil
-        end
-    end
-    return setmetatable(__G, { __index = env })
 end
 
 function block(tokens)
@@ -892,9 +896,8 @@ function Quote:apply_macros(env)
                     or self:slice(i+2):balanced("[", "]")
                     or self:slice(i+2):balanced("{", "}")
                 if args then
-                    args = args:apply_macros(env)
                     table.insert(calls, {tok, args:slice(2, -2), i})
-                elseif self[i+2]:is_string() then
+                elseif self[i+2] and self[i+2]:is_string() then
                     table.insert(calls, {
                         tok, Quote(self[i+2]), i
                     })
@@ -941,7 +944,7 @@ function Quote:apply_macros(env)
                     or self:slice(i):balanced("[", "]")
                     or self:slice(i):balanced("{", "}")
                 if not args then
-                    if self[i]:is_string() then
+                    if self[i] and self[i]:is_string() then
                         new_quote = new_quote:append(value)
                         goto continue
                     end
@@ -965,7 +968,7 @@ function Quote:write(path, env)
     self = self:apply_macros(env)
     local file = io.open(path, "w+")
     if file then
-        file:write(tostring(self))
+        file:write("require [[quoted_lib]]\n" .. tostring(self))
     end
     file:close()
     local handle = io.popen("stylua --version")
@@ -976,15 +979,20 @@ function Quote:write(path, env)
     end
 end
 
+local function get_path(depth)
+  if not path then
+    path = debug.getinfo(depth + 3).source:sub(2)
+    path = path:gsub("%.lua", "")
+    path = path .. ".out.lua"
+  end
+  return path
+end
+
 function generate(path, depth)
     depth = depth or 0
     return function(quote)
         local env = getenv(depth + 1)
-        if not path then
-            path = debug.getinfo(depth + 2).source:sub(2)
-            path = path:gsub("%.lua", "")
-            path = path .. ".out.lua"
-        end
+        path = get_path(depth)
         quote = Quote(quote)
         quote:write(path, env)
     end
@@ -1012,7 +1020,7 @@ function run(mode, depth, original)
                 return formatted
             end
         end
-        local func, err = load(tostring(quote), "chunk", "t", _G)
+        local func, err = load(tostring(quote), "chunk", "t", original_G)
         if not err then
             return func()
         end
@@ -1022,10 +1030,15 @@ end
 
 function execute(path)
     return function(quote)
+        path = get_path(0)
         generate(path, 1)(quote)
-        return run(path)(quote)
+        os.execute("lua5.3 " .. path)
     end
 end
+
+todo = Quote [=[
+  error("TODO!")
+]=]
 
 function f(quote)
     assert(#quote == 1, "f!() macro only supports a single string token")
@@ -1067,9 +1080,9 @@ function fn(quote)
     if quote[1]:is("do") then
         quote = quote << "do" >> "end"
         return Quote([[
-            id(function(%s)
+            table.remove({function(%s)
                 %s
-            end)
+            end})
         ]], params, quote)
     end
     return Quote([[
@@ -1087,49 +1100,16 @@ function breakif(quote)
     ]], quote)
 end
 
-function id(x)
-    return x
-end
-
 function r(quote)
     local var, quote = quote:expect_name()
     local op, quote = quote:expect_special()
     op = Quote(op.value:sub(1, -2))[1]
     return Quote([[
-        id(function()
+        table.remove({function()
             %s = %s %s %s
             return %s
-        end)()
+        end})()
     ]], var, var, op, quote, var)
 end
 
-function printbold(str)
-    print("\27[1m" .. str .. "\27[0m")
-end
 
-function cls()
-    os.execute("cls")
-end
-
-function trim(str)
-    return str:gsub("^%s*", ""):gsub("%s*$", "")
-end
-
-function assert_expected(str, expected)
-    local line = debug.getinfo(2).currentline
-    assert(trim(str) == trim(expected), tostring(line), 2)
-end
-
-local is = {}
-local last
-function forever(_, prev)
-    if last and prev and last >= prev then
-        table.remove(is, #is)
-    end
-    if not prev then
-        table.insert(is, 0)
-    end
-    last = prev
-    is[#is] = is[#is] + 1
-    return is[#is]
-end
