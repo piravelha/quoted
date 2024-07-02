@@ -8,3 +8,4 @@ Welcome to the documentation for quoted. This library provides a set of tools fo
 - [Classes](classes/)
   - [Token](classes/token.md)
   - [Quote](classes/quote.md)
+- [Examples](../examples/)
