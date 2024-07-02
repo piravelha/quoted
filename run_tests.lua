@@ -7,12 +7,12 @@ local function test(path)
         require("test." .. path)
     end)
     if not ok then
-        result = result:match(": (%d+)")
+        if result == nil then error("Result is nil") end
         print("\27[31mTest Failed: \27[0m"
             .. path
             .. " (\27[31mtest/"
             .. path
-            .. ".lua:"
+            .. ".lua: "
             .. result
             .. "\27[0m)")
         all_pass = false
@@ -23,6 +23,9 @@ end
 
 os.execute("cls")
 test("simple")
+test("append")
+test("pop")
+test("insert")
 
 if all_pass then 
     print("\27[32mAll Tests Passed!\27[0m ("

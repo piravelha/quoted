@@ -1,26 +1,30 @@
 require [[quoted]]
 
-local x = Quote[[ 5 ]]
+local x = Quote [[ 5 ]]
 
-local first = run [[test]] [=[
+local first = run "test" [=[
     print(x!)
 ]=]
 
 local function square(quote)
-    return Quote([[(%s) * (%s)]], quote, quote)
+    return [[
+        ($quote) * ($quote)
+    ]], { quote = quote }
 end
 
-local second = run [[test]] [=[
+local second = run "test" [=[
     local result = square!(3)
     print(square!(result))
 ]=]
 
 local function inline_add(quote)
     local a, b = quote:args()
-    return Quote([[%s]], expr(a) + expr(b))
+    return [[
+        $result
+    ]], { result = a:expr() + b:expr() }
 end
 
-local third = run [[test]] [=[
+local third = run "test" [=[
     local x = inline_add!(1, 2)
     local y = inline_add!(5, 4)
     print(x + y)

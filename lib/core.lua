@@ -58,3 +58,9 @@ function repr(object)
     end
     return tostring(object)
 end
+
+System = {
+    out = {
+        println = print,
+    },
+}

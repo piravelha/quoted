@@ -1,3 +1,5 @@
+require [[lib.core]]
+
 local original_G = {}
 
 for k, v in pairs(_G) do
@@ -507,14 +509,18 @@ function expr(tokens)
     and tokens[1].value ~= "true"
     and tokens[1].value ~= "false"
     and tokens[1].value ~= "nil" then
-        error("Attempting to evaluate not compile-time known value: '" .. tokens[1].value .. "'")
+        return nil
     end
-    local func, err = load("require(\"quoted_lib\") return " .. tostring(tokens), "chunk", "t", setmetatable(_G, { __index = tokens.env }))
+    local func, err = load("require(\"lib.core\") return " .. tostring(tokens), "chunk", "t", setmetatable(_G, { __index = tokens.env }))
     if not func then
         print("syntax error on the following quote:\n" .. tostring(tokens))
         error(err)
     end
-    return func()
+    local ok, res = pcall(func)
+    if not ok then
+        return nil
+    end
+    return res
 end
 
 --- Evaluates the quote as a block
@@ -555,9 +561,9 @@ function Quote:insert(index, value)
     local new_tokens = Quote:from(self)
     for i, tok in self:enumerate() do
         if i == index then
-            new_tokens:append(value)
+            new_tokens = new_tokens:append(value)
         end
-        new_tokens:append(tok)
+        new_tokens = new_tokens:append(tok)
     end
     return new_tokens
 end
@@ -968,7 +974,7 @@ end
 
 function QuoteList:join(separator)
     if type(separator) == "string" or separator.type then
-        separator = Quote("%s", separator)
+        separator = Quote(separator)
     end
     local new_tokens = Quote()
     for i, stream in pairs(self) do
@@ -1226,8 +1232,8 @@ function run(mode, depth, original)
                 return formatted
             end
         end
-        local func, err = load(tostring(quote), "chunk", "t", original_G)
-        if not err then
+        local func, err = load("require(\"quoted_lib\")" .. tostring(quote), "chunk", "t", original_G)
+        if not err and func then
             return func()
         end
         error(err, 2)
@@ -1288,22 +1294,29 @@ function println(quote)
 end
 
 function fn(quote)
-    quote = quote << "("
+    _, quote = quote:expect("(")
     local params, quote = quote:take_until(")")
-    quote = quote << "=>"
+    _, quote = quote:expect("=>")
     if quote[1]:is("do") then
-        quote = quote << "do" >> "end"
-        return Quote [=[
-            table.remove({function({params})
-                {quote}
-            end})
-        ]=]
+        _, quote = quote:expect("do")
+        _, quote = quote:expect_last("end")
+        return [=[
+            table.remove{function($params)
+                $quote
+            end}
+        ]=], {
+            params = params,
+            quote = quote,
+        }
     end
-    return Quote [=[
-        (function({params})
-            return {quote}
-        end)
-    ]=]
+    return [=[
+        table.remove{function($params)
+            return $quote
+        end}
+    ]=], {
+        params = params,
+        quote = quote,
+    }
 end
 
 function breakif(quote)
@@ -1372,4 +1385,25 @@ function read(quote)
         var = var,
         path = path,
     }
+end
+
+function enum(quote)
+    local fields = quote:split(",")
+    fields = fields:filter()
+    local iota = 0
+    fields = fields:map(function(field)
+        iota = iota + 1
+        local str = tostring(iota)
+        return field:extend("=" .. str)
+    end):join(",")
+    return [=[
+        { $fields }
+    ]=], { fields = fields }
+end
+
+function assert_eq(quote)
+    local a, b = quote:args()
+    a, b = expr(a), expr(b)
+    assert(a == b)
+    return [=[ ]=]
 end
