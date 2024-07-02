@@ -1,4 +1,3 @@
 require("quoted_lib")
 
-local test = 10
-print(string.format("eu amo %s", test))
+print(repr(10 * 10))

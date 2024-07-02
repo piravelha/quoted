@@ -17,6 +17,21 @@ local TokenType = {
     Delimiter = "delimiiter",
 }
 
+---@class Token
+---@field type string
+---@field value string
+---@field map fun(self: Token, fn: fun(s: string): string): Token
+---@field flatmap fun(self: Token, fn: fun(s: string): Token): Quote
+---@field is fun(self: Token, value: string): boolean
+---@field is_name fun(self: Token): boolean
+---@field is_number fun(self: Token): boolean
+---@field is_string fun(self: Token): boolean
+---@field is_special fun(self: Token): boolean
+---@field is_paren fun(self: Token): boolean
+---@field is_bracket fun(self: Token): boolean
+---@field is_brace fun(self: Token): boolean
+---@field assert_is fun(self: Token, ...: string): nil
+
 Token = setmetatable({
     name = "name",
     number = "number",
@@ -39,6 +54,10 @@ Token = setmetatable({
 })
 Token.__index = Token
 
+
+--- Maps over each character of a token with the specified function
+--- @param fn fun(s: string): string -- The transformation that will be applied to each character of the token
+--- @return Token -- A new token with transformations applied
 function Token:map(fn)
     local value = ""
     for i = 1, #self.value do
@@ -48,6 +67,9 @@ function Token:map(fn)
     return Token(self.type, value)
 end
 
+--- Flatmaps over each character of a token with the specified function, generating a quote of all the results
+--- @param fn fun(s: string): Token -- The transformation from string to Token that will be applied to each character of the token
+--- @return Quote
 function Token:flatmap(fn)
     local quote = Quote()
     for i = 1, #self.value do
@@ -57,38 +79,58 @@ function Token:flatmap(fn)
     return quote
 end
 
+--- Returns true if the value of the token matches the specified value
+--- @param value string
+--- @return boolean
 function Token:is(value)
     return self.value == value
 end
 
+--- Returns true if the type of the token is name
+--- @return boolean
 function Token:is_name()
     return self.type == "name"
 end
 
+--- Returns true if the type of the token is number
+--- @return boolean
 function Token:is_number()
     return self.type == "number"
 end
 
+--- Returns true if the type of the token is string
+--- @return boolean
 function Token:is_string()
     return self.type == "string"
 end
 
+--- Returns true if the type of the token is special
+--- @return boolean
 function Token:is_special()
     return self.type == "special"
 end
 
+--- Returns true if the type of the token is paren
+--- @return boolean
 function Token:is_paren()
     return self.type == "paren"
 end
 
+--- Returns true if the type of the token is bracket
+--- @return boolean
 function Token:is_bracket()
     return self.type == "bracket"
 end
 
+--- Returns true if the type of the token is brace
+--- @return boolean
 function Token:is_brace()
     return self.type == "brace"
 end
 
+--- Asserts that the token matches at least one of the specified types
+--- @vararg string
+--- @return nil
 function Token:assert_is(...)
     local types = {...}
     local str = ""
@@ -157,6 +199,49 @@ function getenv(depth)
     return __G
 end
 
+--- @class Quote
+--- @field values {[number]: Token}
+--- @field env {[string]: any}
+--- @field enumerate fun(self: Quote): fun(): (number, Token) | nil
+--- @field insert fun(self: Quote, index: number, value: Token): Quote
+--- @field index_of fun(self: Quote, value: Token | string): number | nil
+--- @field count fun(self: Quote, value: Token | string): number
+--- @field reverse fun(self: Quote): Quote
+--- @field remove fun(self: Quote, index: number): Token, Quote
+--- @field contains fun(self: Quote, token: Token | string): boolean
+--- @field append fun(self: Quote, value: Token | string): Quote
+--- @field prepend fun(self: Quote, value: Token | string): Quote
+--- @field pop fun(self: Quote): Token, Quote
+--- @field peek_value fun(self: Quote): string
+--- @field extend fun(self: Quote, other: Quote): Quote
+--- @field slice fun(self: Quote, min: number, max: number?): Quote
+--- @field expect fun(self: Quote, value: string): Token, Quote
+--- @field consume fun(self: Quote, value: string): Quote
+--- @field expect_last fun(self: Quote, value: string): Token, Quote
+--- @field expect_type fun(self: Quote, ...: string): Token, Quote
+--- @field expect_name fun(self: Quote): Token, Quote
+--- @field expect_number fun(self: Quote): Token, Quote
+--- @field expect_paren fun(self: Quote): Token, Quote
+--- @field expect_bracket fun(self: Quote): Token, Quote
+--- @field expect_brace fun(self: Quote): Token, Quote
+--- @field expect_special fun(self: Quote): Token, Quote
+--- @field expect_delimiter fun(self: Quote): Token, Quote
+--- @field expect_string fun(self: Quote): Token, Quote
+--- @field expect_last_type fun(self: Quote, type: string): Token, Quote
+--- @field split fun(self: Quote, separator: string | Token, deep: boolean?): QuoteList
+--- @field args fun(self: Quote): Quote
+--- @field str fun(self: Quote): string
+--- @field repr fun(self: Quote): string
+--- @field balanced fun(self: Quote, start: string | Token, finish: string | Token): Quote | nil, Quote
+--- @field replace fun(self: Quote, old: string | Token, new: string | Token): Quote
+--- @field splitjoin fun(self: Quote, separator: string | Token, joiner: string | Token): Quote
+--- @field map fun(self: Quote, fn: fun(token: Token): Token | Quote): Quote
+--- @field foreach fun(self: Quote, fn: fun(token: Token))
+--- @field pairs fun(self: Quote, fn: fun(i: number, token: Token))
+--- @field take_until fun(self: Quote, separator: string | Token): Quote, Quote
+--- @field rep fun(self: Quote, num: number): QuoteList
+--- @field tolist fun(self: Quote): QuoteList
+--- @field expr fun(self: Quote): any
 Quote = setmetatable({
     __tostring = function(self)
         local str = ""
@@ -168,6 +253,9 @@ Quote = setmetatable({
         end
         return str
     end,
+    --- Index
+    --- @param key any
+    --- @return Token
     __index = function(self, key)
         if type(key) == "number" then
             return rawget(self, "values")[key]
@@ -208,6 +296,10 @@ Quote = setmetatable({
     __unm = function(self)
         return self:pop()
     end,
+    --- Generates a new quote, with the environment of the specified one
+    --- @param self Quote
+    --- @param other Quote
+    --- @return Quote
     from = function(self, other)
         local new = self()
         new.env = other.env
@@ -251,8 +343,17 @@ Quote = setmetatable({
         stream.env = getenv(depth)
         return stream
     end,
+    --- Index
+    --- @param key any
+    --- @return Token
+    __index = function(self, key)
+        --- @type any
+        local value = rawget(self, key)
+        return value
+    end,
 })
 
+--- @class QuoteList
 local QuoteList = setmetatable({
     __tostring = function(self)
         local str = "{"
@@ -274,14 +375,17 @@ local QuoteList = setmetatable({
 })
 QuoteList.__index = QuoteList
 
+--- Based on a given string, this function replaces occurences of the ${} pattern with the variables specified as the mappings
+--- @param str string -- The format string
+--- @return fun(mappings: {[string]: Quote}): string
 function format(str)
     return function(mappings)
         function replace_placeholder(str)
-            str = str:gsub("%${(%w+)}", function(match)
+            str = str:gsub("%$([%w_]+)", function(match)
                 if mappings[match] then
                     return tostring(mappings[match])
                 end
-                return "${" .. match .. "}"
+                return "$" .. match
             end)
             return str
         end
@@ -290,7 +394,11 @@ function format(str)
     end
 end
 
-function tokenize(code, file)
+--- Tokenizes a given string into a sequence of tokens (Quote)
+--- @param code string
+--- @return Quote
+function tokenize(code)
+    code = code:gsub("%-%-.*", "")
     local tokens = Quote()
     local i = 1
     while i <= #code do
@@ -372,6 +480,9 @@ function tokenize(code, file)
     return tokens
 end
 
+--- Evaluates the specified quote as a block
+--- @param tokens Quote
+--- @return any
 function block(tokens)
     if type(tokens) == "string" then
         tokens = Quote(2, tokens)
@@ -384,6 +495,9 @@ function block(tokens)
     return func()
 end
 
+--- Evaluates the specified quote, returning its result
+--- @param tokens Quote
+--- @return any
 function expr(tokens)
     if type(tokens) == "string" then
         tokens = Quote(2, tokens)
@@ -403,15 +517,22 @@ function expr(tokens)
     return func()
 end
 
+--- Evaluates the quote as a block
+--- @return any
 function Quote:block()
     return block(self)
 end
 
+
+--- Evaluates the quote, returning its result
+--- @return any
 function Quote:expr()
     local quote = self
     return expr(quote)
 end
 
+--- Returns an interator that gives back the index, and the current token of the quote
+--- @return fun(): (number, Token) | nil
 function Quote:enumerate()
     local index = 0
     local function iter()
@@ -423,6 +544,10 @@ function Quote:enumerate()
     return iter
 end
 
+--- Inserts a token at the specified index and returns the new quote
+--- @param index number
+--- @param value Token
+--- @return Quote
 function Quote:insert(index, value)
     if type(value) == "string" then
         value = Quote(value)[1]
@@ -437,6 +562,9 @@ function Quote:insert(index, value)
     return new_tokens
 end
 
+--- Returns the index of the specified value inside the quote, returning nil if it fails
+--- @param value Token | string
+--- @return number | nil
 function Quote:index_of(value)
     if type(value) == "string" then
         value = Quote(value)[1]
@@ -448,6 +576,9 @@ function Quote:index_of(value)
     end
 end
 
+--- Returns the amount of times a value is found inside the quotek
+--- @param value Token | string
+--- @return number
 function Quote:count(value)
     if type(value) == "string" then
         value = Quote(value)[1]
@@ -461,6 +592,8 @@ function Quote:count(value)
     return count
 end
 
+--- Reverses the quote and returns the reversed value
+--- @return Quote
 function Quote:reverse()
     local new_tokens = Quote:from(self)
     for i = #self, 1, -1 do
@@ -469,6 +602,9 @@ function Quote:reverse()
     return new_tokens
 end
 
+--- Removes the value at the index specified and returns the removed value and the new quote
+--- @param index number
+--- @return Token, Quote
 function Quote:remove(index)
     local new_tokens = Quote:from(self)
     local removed
@@ -482,6 +618,9 @@ function Quote:remove(index)
     return removed, new_tokens
 end
 
+--- Returns true if the value is found inside the quote
+--- @param token Token | string
+--- @return boolean
 function Quote:contains(token)
     if type(token) == "string" then
         token = Quote(token)[1]
@@ -494,6 +633,9 @@ function Quote:contains(token)
     return false
 end
 
+--- Appends a value to the end of the quote and returns the new quote
+--- @param value Token | string
+--- @return Quote
 function Quote:append(value)
     if type(value) == "string" then
         value = Quote(value)[1]
@@ -506,6 +648,9 @@ function Quote:append(value)
     return new_tokens
 end
 
+--- Prepends a value to the start of the quote and returns the new quote
+--- @param value Token | string
+--- @return Quote
 function Quote:prepend(value)
     if type(value) == "string" then
         value = Quote(value)[1]
@@ -518,21 +663,30 @@ function Quote:prepend(value)
     return new_tokens
 end
 
+--- Pops the first value of the quote and returns it alongside the quote
+--- @return Token, Quote
 function Quote:pop()
     local new_tokens = Quote:from(self)
     for i = 2, #self do
         new_tokens = new_tokens:append(self[i])
     end
-    return self[1], new_tokens
+    --- @type Token
+    local first = self[1]
+    return first, new_tokens
 end
 
+--- Returns the value of the first token of the quote
+--- @return string
 function Quote:peek_value()
     return self[1].value
 end
 
-function Quote:extend(other, ...)
+--- Extends the quote with the other quote, appending the other at the end of the quote
+--- @param other Quote
+--- @return Quote
+function Quote:extend(other)
     if type(other) == "string" then
-        other = Quote(string.format(other, ...))
+        other = Quote(other)
     end
     local new_tokens = Quote:from(self)
     for tok in self:iter() do
@@ -544,6 +698,10 @@ function Quote:extend(other, ...)
     return new_tokens
 end
 
+--- Returns the subslice of the quote starting from min and ending on max
+--- @param min number
+--- @param max number
+--- @return Quote
 function Quote:slice(min, max)
     if not max then
         max = #self
@@ -558,6 +716,9 @@ function Quote:slice(min, max)
     return new_tokens
 end
 
+--- Pops the first token of the quote and asserts that it is equal to the provided value
+--- @param value string
+--- @return Token, Quote
 function Quote:expect(value)
     local popped, tokens = self:pop()
     if popped.value == value then
@@ -566,6 +727,9 @@ function Quote:expect(value)
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
 
+--- Consumes the first token of the quote and asserts that it is equal to the provided value, and only returns the tokens
+--- @param value string
+--- @return Quote
 function Quote:consume(value)
     local popped, tokens = self:pop()
     if popped.value == value then
@@ -574,49 +738,55 @@ function Quote:consume(value)
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
 
+--- Pops the last token of the quote and asserts that it is equal to the provided value
+--- @param value string
+--- @return Token, Quote
 function Quote:expect_last(value)
     local popped, tokens = self:remove(#self)
     if popped.value == value then
-        return tokens, popped
+        return popped, tokens
     end
     error(string.format("Expected '%s', got '%s'", value, popped))
 end
 
+--- Pops the first token of the quote and asserts that its type matches at least one of the provided types
+--- @vararg string
+--- @return Token, Quote
 function Quote:expect_type(...)
     local popped, tokens = self:pop()
     popped:assert_is(...)
     return popped, tokens
 end
 
-function Quote:expect_name(type)
+function Quote:expect_name()
     return self:expect_type("name")
 end
 
-function Quote:expect_number(type)
+function Quote:expect_number()
     return self:expect_type("number")
 end
 
-function Quote:expect_paren(type)
+function Quote:expect_paren()
     return self:expect_type("paren")
 end
 
-function Quote:expect_bracket(type)
+function Quote:expect_bracket()
     return self:expect_type("bracket")
 end
 
-function Quote:expect_brace(type)
+function Quote:expect_brace()
     return self:expect_type("brace")
 end
 
-function Quote:expect_special(type)
+function Quote:expect_special()
     return self:expect_type("special")
 end
 
-function Quote:expect_delimiter(type)
+function Quote:expect_delimiter()
     return self:expect_type("delimiter")
 end
 
-function Quote:expect_string(type)
+function Quote:expect_string()
     return self:expect_type("string")
 end
 
@@ -694,7 +864,7 @@ function Quote:balanced(start, finish)
         finish = Quote(finish)[1]
     end
     if #self == 0 then
-        return
+        return nil, self
     end
     if self[1].value ~= start.value then
         return nil, self
@@ -800,7 +970,7 @@ function QuoteList:join(separator)
     if type(separator) == "string" or separator.type then
         separator = Quote("%s", separator)
     end
-    local new_tokens = Quote:from(self)
+    local new_tokens = Quote()
     for i, stream in pairs(self) do
         if i > 1 then
             new_tokens = new_tokens:extend(separator)
@@ -1001,12 +1171,15 @@ function Quote:write(path, env)
     if file then
         file:write("\nrequire \"quoted_lib\"\n\n" .. tostring(self))
     end
+    assert(file)
     file:close()
     local handle = io.popen("stylua --version")
-    local result = handle:read("*a")
-    handle:close()
-    if result and result ~= "" then
-        os.execute("stylua " .. path)
+    if handle then        
+        local result = handle:read("*a")
+        handle:close()
+        if  result and result ~= "" then
+            os.execute("stylua " .. path)
+        end
     end
 end
 
@@ -1038,10 +1211,12 @@ function run(mode, depth, original)
         quote = quote:apply_macros(env)
         if mode == "debug" or mode == "test" then
             local file = io.open("temp", "w+")
+            assert(file)
             file:write(tostring(quote))
             file:close()
             os.execute("stylua temp")
             local file = io.open("temp", "r+")
+            assert(file)
             local formatted = file:read("*all")
             file:close()
             os.remove("temp")
@@ -1077,7 +1252,7 @@ function f(quote)
     quote = quote:prepend("("):prepend("repr")
     local vars = QuoteList()
     if type(expr(original)) ~= "string" then
-        return [[${quote}]], {quote = quote}
+        return [[$quote]], {quote = quote}
     end
     local str = expr(quote)
     for match in str:gmatch("(\\*){") do
@@ -1099,7 +1274,7 @@ function f(quote)
         return var:prepend(",")
     end):join("")
     return [[
-        string.format("${str}" ${vars})
+        string.format("$str" $vars)
     ]], {
         str = str,
         vars = vars,
@@ -1108,7 +1283,7 @@ end
 
 function println(quote)
     return [[
-        print(f!(${quote}))
+        print(f!($quote))
     ]], { quote = quote }
 end
 
@@ -1133,7 +1308,7 @@ end
 
 function breakif(quote)
     return Quote [=[
-        if ${quote} then
+        if $quote then
             break
         end
     ]=]
@@ -1145,8 +1320,8 @@ function r(quote)
     op = Quote(op.value:sub(1, -2))[1]
     return Quote [=[
         table.remove({function()
-            ${var} = ${var} ${op} ${quote}
-            return ${var}
+            $var = $var $op $quote
+            return $var
         end})()
     ]=]
 end
@@ -1154,7 +1329,7 @@ end
 function set(quote)
     local var, func = quote:take_until(":=")
     return Quote [=[
-        ${var} = ${func}(${var})
+        $var = $func($var)
     ]=]
 end
 
@@ -1165,13 +1340,13 @@ function concat(quote)
         arg = expr(arg)
         str = str .. tostring(arg)
     end)
-    return [=["${str}"]=], {str = str}
+    return [=["$str"]=], {str = str}
 end
 
 function trim(quote)
     str = expr(quote)
     return [=[
-        ((${quote}):gsub("^%s*(.-)%s*$", "%1"))
+        (($quote):gsub("^%s*(.-)%s*$", "%1"))
     ]=], {quote = quote}
 end
 
@@ -1185,8 +1360,8 @@ function read(quote)
     quote = quote:consume("<=")
     local path, quote = quote:expect_string()
     return [=[
-        ${scope} ${var} = (function()
-            local file = io.open(${path}, "r")
+        $scope $var = (function()
+            local file = io.open($path, "r")
             if not file then return nil end
             local content = file:read("*all")
             file:close()
