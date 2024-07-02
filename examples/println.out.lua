@@ -1,9 +1,5 @@
 require("lib.core")
 
-local main = table.remove({
-	function(arg)
-		print(string.format("Arg is %s", arg))
-		return "Done!"
-	end,
-})
-print(repr(main(5)))
+local a = 10 + 2
+local b = a * a
+print(string.format("result is %s!", b))

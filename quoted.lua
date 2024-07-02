@@ -384,10 +384,13 @@ function format(str)
     return function(mappings)
         function replace_placeholder(str)
             str = str:gsub("%$([%w_]+)", function(match)
+                if tonumber(match) then
+                    match = tonumber(match)
+                  end
                 if mappings[match] then
                     return tostring(mappings[match])
                 end
-                return "$" .. match
+                return "$" .. tostring(match)
             end)
             return str
         end
@@ -501,8 +504,11 @@ end
 --- @param tokens Quote
 --- @return any
 function expr(tokens)
-    if type(tokens) == "string" then
+    if type(tokens) ~= "table" then
         tokens = Quote(2, tokens)
+    end
+    if tokens.type then
+        tokens = Quote(tokens)
     end
     tokens = tokens:apply_macros(tokens.env)
     if #tokens == 1 and tokens[1].type == "name"
@@ -521,6 +527,17 @@ function expr(tokens)
         return nil
     end
     return res
+end
+
+function Template(str)
+    return function(quote)
+        local args = quote:split(",")
+        local raw = {}
+        for k, v in pairs(args) do
+            table.insert(raw, v)
+        end
+        return str, raw
+    end
 end
 
 --- Evaluates the quote as a block
@@ -851,6 +868,14 @@ function Quote:args()
     return self:split(","):unpack()
 end
 
+function Quote:exprs()
+    local values = {}
+    for i, q in pairs({self:args()}) do
+        table.insert(values, expr(q))
+    end
+    return table.unpack(values)
+end
+
 function Quote:str()
     local str = tostring(self)
     str = str:gsub("\\", "\\\\")
@@ -1121,7 +1146,10 @@ function Quote:apply_macros(env)
             if type(env[name.value]) == "function" then
                 args.env = env
                 local quote, mappings = env[name.value](args)
-                local value = Quote(format(quote)(mappings))
+                local value = Quote(quote)
+                if type(quote) == "string" then
+                    value = Quote(format(quote)(mappings))
+                end
                 value.env = env
                 value = value:apply_macros(env)
                 if #value ~= 1 or value[1].value ~= "nil" then
@@ -1131,7 +1159,11 @@ function Quote:apply_macros(env)
                     })
                 end
             else
-                local value = env[name.value]
+                local value = Quote(env[name.value])
+                if #args > 0 then
+                    local str, mappings = Template(env[name.value])(args)
+                    value = Quote(format(str)(mappings))
+                end
                 value = value:apply_macros(env)
                 table.insert(replaced, {
                     value,
@@ -1175,7 +1207,7 @@ function Quote:write(path, env)
     self = self:apply_macros(env)
     local file = io.open(path, "w+")
     if file then
-        file:write("\nrequire \"quoted_lib\"\n\n" .. tostring(self))
+        file:write("\nrequire \"lib.core\"\n\n" .. tostring(self))
     end
     assert(file)
     file:close()
@@ -1232,7 +1264,7 @@ function run(mode, depth, original)
                 return formatted
             end
         end
-        local func, err = load("require(\"quoted_lib\")" .. tostring(quote), "chunk", "t", original_G)
+        local func, err = load("require(\"lib.core\")" .. tostring(quote), "chunk", "t", original_G)
         if not err and func then
             return func()
         end
@@ -1244,7 +1276,7 @@ function execute(path)
     return function(quote)
         path = get_path(0)
         generate(path, 1)(quote)
-        os.execute("lua54 " .. path)
+        os.execute("lua5.3 " .. path)
     end
 end
 

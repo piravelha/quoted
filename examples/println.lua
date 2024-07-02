@@ -1,13 +1,16 @@
 require [[quoted]]
 
-local function square(quote)
-    return [=[
-        ($x) * ($x)
-    ]=], {
-        x = quote,
-    }
-end
-
-run() [=[
-    print(square!(5))
+local square = [=[
+    ($1) * ($1)
 ]=]
+
+local x = [=[
+    10 + ($1)
+]=]
+
+execute() [=[
+    local a = x!(2)
+    local b = square!(a)
+    println!("result is {b}!")
+]=]
+
