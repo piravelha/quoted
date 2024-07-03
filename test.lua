@@ -1,6 +1,7 @@
 require [[quoted]]
 
-execute() [=[
-    local contents = read!("test.lua")
-    print(contents)
+generate() [=[
+    local x = 5
+    r!(x += 10)
+    print(x)
 ]=]

@@ -421,12 +421,12 @@ function tokenize(code)
             local str = "[["
             i = i + 2
             char = code:sub(i, i)
-            while not char:match("%]") do
+            while not char:match("%]") or not code:sub(i+1, i+1):match("%]") do
                 str = str .. char
                 i = i + 1
                 char = code:sub(i, i)
             end
-            i = i + #code:sub(i+1):match("^\\*%]") + 2
+            i = i + 2
             char = code:sub(i, i)
             table.insert(tokens.values, Token(TokenType.String, str .. "]]"))
         elseif char:match("[a-zA-Z_]") then
@@ -869,6 +869,21 @@ end
 
 function Quote:repr()
     return tostring(self)
+end
+
+function Quote:pretty()
+    local repr = self:repr()
+    repr = repr:gsub("%s*%(%s*", "(")
+    repr = repr:gsub("%s*%)%s*", ") ")
+    repr = repr:gsub("%s*%[%s*", "[")
+    repr = repr:gsub("%s*%]%s*", "] ")
+    repr = repr:gsub("%s*{%s*", "{")
+    repr = repr:gsub("%s*}%s*", "} ")
+    repr = repr:gsub("%s*%.%s*", ".")
+    repr = repr:gsub("%s*%:%s*", ":")
+    repr = repr:gsub("%s*,%s*", ", ")
+    repr = repr:gsub("return%s*", "return ")
+    return repr:gsub("^%s*(.-)%s*$", "%1")
 end
 
 function Quote:balanced(start, finish)
@@ -1369,12 +1384,9 @@ function r(quote)
     local var, quote = quote:expect_name()
     local op, quote = quote:expect_special()
     op = Quote(op.value:sub(1, -2))[1]
-    return Quote [=[
-        table.remove({function()
-            $var = $var $op $quote
-            return $var
-        end})()
-    ]=]
+    return [=[
+        $1 = $1 $2 $3
+    ]=], { var, op, quote }
 end
 
 function set(quote)
@@ -1405,11 +1417,16 @@ function concat(quote)
     return [=["$str"]=], {str = str}
 end
 
+function str(quote)
+    return [=[
+        [[$1]]
+    ]=], { quote:pretty() }
+end
+
 function trim(quote)
-    str = expr(quote)
     return [=[
         (($quote):gsub("^%s*(.-)%s*$", "%1"))
-    ]=], {quote = quote}
+    ]=], { quote = quote }
 end
 
 function defer(quote)
@@ -1477,14 +1494,6 @@ function assert_eq(quote)
     a, b = expr(a), expr(b)
     assert(a == b)
     return [=[ ]=]
-end
-
-function scope(quote)
-    return [=[
-        table.remove {function()
-            $quote
-        end}()
-    ]=], { quote = quote }
 end
 
 function spread(quote)
@@ -1558,18 +1567,4 @@ function range(quote)
             $5
         end
     ]=], { i, first, second, third, body }
-end
-
-function select(quote)
-    quote = quote << "["
-    local mode, quote = quote:take_until("]")
-    if #mode == 1 and mode[1].value == "#" then
-        mode = Quote([["#"]])[1]
-    end
-    if #quote > 0 then
-        quote = quote:prepend(",")
-    end
-    return Quote([[
-        select(%s %s)
-    ]], mode, quote)
 end

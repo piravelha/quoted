@@ -10,7 +10,7 @@ function cls()
     os.execute("cls")
 end
 
-function trim(str)
+local function trim(str)
     return str:gsub("^%s*", ""):gsub("%s*$", "")
 end
 

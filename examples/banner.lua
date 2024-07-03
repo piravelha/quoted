@@ -1,9 +1,8 @@
-
 require [[quoted]]
 
 execute() [=[
-    local quoted = "lua macros"
-    println!("I love {quoted}!")
+    open!(file = "quoted.lua", "r";
+        local contents = file:read("*all")
+        print(contents)
+    end)
 ]=]
-
-
