@@ -155,29 +155,6 @@ function getenv(depth)
     local env = {
         f = f,
         println = println,
-        loop = function(quote)
-            local i, quote = quote:expect_name()
-            quote = quote << "do"
-            quote = quote >> "end"
-            return Quote([[
-                for %s in forever do
-                    %s
-                end
-            ]], i, quote)
-        end,
-        select = function(quote)
-            quote = quote << "["
-            local mode, quote = quote:take_until("]")
-            if #mode == 1 and mode[1].value == "#" then
-                mode = Quote([["#"]])[1]
-            end
-            if #quote > 0 then
-                quote = quote:prepend(",")
-            end
-            return Quote([[
-                select(%s %s)
-            ]], mode, quote)
-        end,
     }
     for i = 1, debug.getinfo(1, "l").currentline do
         local name, value = debug.getlocal(depth + 2, i)
@@ -318,12 +295,15 @@ Quote = setmetatable({
         return iter
     end,
 }, {
-    __call = function(self, str)
+    __call = function(self, str, mappings)
         local depth
         if type(str) ~= "nil" then
             str = tostring(str)
         end
         if str and type(str) == "string" then
+            if mappings then
+                str = format(str)(mappings)
+            end
             str = tokenize(str)
             depth = 1
         elseif type(str) == "number" then
@@ -356,7 +336,7 @@ Quote = setmetatable({
 })
 
 --- @class QuoteList
-local QuoteList = setmetatable({
+QuoteList = setmetatable({
     __tostring = function(self)
         local str = "{"
         for i, stream in pairs(self) do
@@ -701,7 +681,7 @@ end
 --- Returns the value of the first token of the quote
 --- @return string
 function Quote:peek_value()
-    return self[1].value
+    return self[1] and self[1].value
 end
 
 --- Extends the quote with the other quote, appending the other at the end of the quote
@@ -868,6 +848,10 @@ function Quote:args()
     return self:split(","):unpack()
 end
 
+function Quote:splits(separator)
+    return self:split(separator):unpack()
+end
+
 function Quote:exprs()
     local values = {}
     for i, q in pairs({self:args()}) do
@@ -1014,7 +998,11 @@ end
 function QuoteList:map(fn)
     local quote_list = QuoteList()
     for i, quote in pairs(self) do
-        table.insert(quote_list, fn(quote))
+        local template, mappings = fn(quote)
+        local value = Quote(template, mappings)
+        value.env = quote.env
+        value = value:apply_macros(quote.env)
+        table.insert(quote_list, value)
     end
     return quote_list
 end
@@ -1022,6 +1010,12 @@ end
 function QuoteList:foreach(fn)
     for i, quote in pairs(self) do
         fn(quote)
+    end
+end
+
+function QuoteList:pairs(fn)
+    for i, quote in pairs(self) do
+        fn(i, quote)
     end
 end
 
@@ -1124,7 +1118,8 @@ function Quote:apply_macros(env)
                 local args = self:slice(i+2):balanced("(", ")")
                     or self:slice(i+2):balanced("[", "]")
                     or self:slice(i+2):balanced("{", "}")
-                if args then
+                if args and (type(env[tok.value]) == "function"
+                or tostring(env[tok.value]):match("%$[%w_]+")) then
                     table.insert(calls, {tok, args:slice(2, -2), i})
                 elseif self[i+2] and self[i+2]:is_string() then
                     table.insert(calls, {
@@ -1146,28 +1141,27 @@ function Quote:apply_macros(env)
             if type(env[name.value]) == "function" then
                 args.env = env
                 local quote, mappings = env[name.value](args)
-                local value = Quote(quote)
-                if type(quote) == "string" then
-                    value = Quote(format(quote)(mappings))
-                end
+                local value = Quote(quote, mappings)
                 value.env = env
                 value = value:apply_macros(env)
                 if #value ~= 1 or value[1].value ~= "nil" then
                     table.insert(replaced, {
                         value,
                         i,
+                        name,
                     })
                 end
             else
                 local value = Quote(env[name.value])
-                if #args > 0 then
+                if #args > 0 and tostring(env[name.value]):match("%$[%w_]+") then
                     local str, mappings = Template(env[name.value])(args)
-                    value = Quote(format(str)(mappings))
+                    value = Quote(str, mappings)
                 end
                 value = value:apply_macros(env)
                 table.insert(replaced, {
                     value,
                     i,
+                    name,
                 })
             end
         end
@@ -1176,13 +1170,13 @@ function Quote:apply_macros(env)
     local i = 1
     while i <= #self do
         for _, rep in pairs(replaced) do
-            local value, j = table.unpack(rep)
+            local value, j, name = table.unpack(rep)
             if i == j then
                 i = i + 2
                 local args = self:slice(i):balanced("(", ")")
                     or self:slice(i):balanced("[", "]")
                     or self:slice(i):balanced("{", "}")
-                if not args then
+                if not args or (type(env[name.value]) ~= "function" and not tostring(env[name.value]):match("%$[%w_]+")) then
                     if self[i] and self[i]:is_string() then
                         new_quote = new_quote:append(value)
                         goto continue
@@ -1268,6 +1262,7 @@ function run(mode, depth, original)
         if not err and func then
             return func()
         end
+        print(quote)
         error(err, 2)
     end
 end
@@ -1276,7 +1271,11 @@ function execute(path)
     return function(quote)
         path = get_path(0)
         generate(path, 1)(quote)
-        os.execute("lua5.3 " .. path)
+        if _VERSION == "Lua 5.3" then
+            os.execute("lua5.3 " .. path)
+        elseif _VERSION == "Lua 5.4" then
+            os.execute("lua54 " .. path)
+        end
     end
 end
 
@@ -1309,7 +1308,9 @@ function f(quote)
         end
     end
     vars = vars:map(function(var)
-        return var:prepend(",")
+        return Quote([[
+            , repr($var)
+        ]], { var = var })
     end):join("")
     return [[
         string.format("$str" $vars)
@@ -1326,8 +1327,13 @@ function println(quote)
 end
 
 function fn(quote)
-    _, quote = quote:expect("(")
-    local params, quote = quote:take_until(")")
+    local params
+    if quote:peek_value() == "(" then
+        _, quote = quote:expect("(")
+        params, quote = quote:take_until(")")
+    else
+        params, quote = quote:expect_name()
+    end
     _, quote = quote:expect("=>")
     if quote[1]:is("do") then
         _, quote = quote:expect("do")
@@ -1352,11 +1358,11 @@ function fn(quote)
 end
 
 function breakif(quote)
-    return Quote [=[
+    return [=[
         if $quote then
             break
         end
-    ]=]
+    ]=], { quote = quote }
 end
 
 function r(quote)
@@ -1372,10 +1378,21 @@ function r(quote)
 end
 
 function set(quote)
-    local var, func = quote:take_until(":=")
-    return Quote [=[
-        $var = $func($var)
-    ]=]
+    local var, quote = quote:take_until("<=")
+    local func, quote = quote:expect_name()
+    local params = Quote()
+    if quote:peek_value() == "(" then
+        _, quote = quote:pop()
+        params, quote = quote:take_until(")")
+        params = params:append(",")
+    end
+    return [=[
+        $var = $func($params $var)
+    ]=], {
+        var = var,
+        params = params,
+        func = func,
+    }
 end
 
 function concat(quote)
@@ -1395,28 +1412,50 @@ function trim(quote)
     ]=], {quote = quote}
 end
 
-function read(quote)
-    local scope = ""
-    if quote:peek_value() == "local" then
-        _, quote = quote:pop()
-        scope = "local"
-    end
-    local var, quote = quote:expect_name()
-    quote = quote:consume("<=")
-    local path, quote = quote:expect_string()
+function defer(quote)
     return [=[
-        $scope $var = (function()
-            local file = io.open($path, "r")
-            if not file then return nil end
-            local content = file:read("*all")
-            file:close()
-            return content
-        end)()
+        setmetatable({}, {
+            __gc = function()
+                $quote
+            end,
+        })
+    ]=], { quote = quote }
+end
+
+function open(quote)
+    local param, quote = quote:expect_name()
+    _, quote = quote:expect("=")
+    local path, quote = quote:expect_string()
+    local mode = Quote [["r"]]
+    if quote:peek_value() == "," then
+        _, quote = quote:pop()
+        mode, quote = quote:expect_string()
+    end
+    _, quote = quote:expect(";")
+    local _, body = quote:expect_last("end")
+    return [=[
+        local _ = (function($param)
+            $body
+            $param:close()
+        end)(io.open($path, $mode))
     ]=], {
-        scope = scope,
-        var = var,
         path = path,
+        param = param,
+        mode = mode,
+        body = body,
     }
+end
+
+function read(quote)
+    return [=[
+        _G._(function()
+            local contents
+            open!(file = $path;
+                contents = file:read("*all")
+            end)
+            return contents
+        end)()
+    ]=], { path = quote }
 end
 
 function enum(quote)
@@ -1438,4 +1477,99 @@ function assert_eq(quote)
     a, b = expr(a), expr(b)
     assert(a == b)
     return [=[ ]=]
+end
+
+function scope(quote)
+    return [=[
+        table.remove {function()
+            $quote
+        end}()
+    ]=], { quote = quote }
+end
+
+function spread(quote)
+    local vars, object = quote:take_until("=")
+    vars = vars:split(",")
+    local decls = QuoteList()
+    vars:pairs(function(index, var)
+        local rest = false
+        if var:peek_value() == "..." then
+            _, var = var:pop()
+            rest = true
+        end
+        local decl = var:prepend("local")
+        decl = decl:append("=")
+        if rest then
+            local value = Quote([[
+                { table.unpack($1, $2) }
+            ]], { object, index })
+            decl = decl:extend(value)
+        else
+            local value = Quote([[
+                ($1)[$2]
+            ]], { object, index })
+            decl = decl:extend(value)
+        end
+        decls = decls:append(decl)
+    end)
+    return [=[ $1 ]=], { decls:join("") }
+end
+
+function loop(quote)
+    local i, quote = quote:expect_name()
+    _, quote = quote:expect("do")
+    _, quote = quote:expect_last("end")
+    return [[
+        for $i in forever do
+            $body
+        end
+    ]], {
+        i = i,
+        body = quote,
+    }
+end
+
+function range(quote)
+    local var, body = quote:split(","):unpack()
+    if #quote:split(",") == 1 then
+        var, body = quote:split(";"):unpack()
+    end
+    local i, var = var:expect_name()
+    _, var = var:expect("=")
+    local first, second, third = var:split(":"):unpack()
+    _, body = body:expect("do")
+    _, body = body:expect_last("end")
+    if not second then
+        return [=[
+            for $1 = 1, $2, 1 do
+                $3
+            end
+        ]=], { i, first, body }
+    end
+    if not third then
+        return [=[
+            for $1 = $2, $3, 1 do
+                $4
+            end
+        ]=], { i, first, second, body }
+    end
+    return [=[
+        for $1 = $2, $3, $4 do
+            $5
+        end
+    ]=], { i, first, second, third, body }
+end
+
+function select(quote)
+    quote = quote << "["
+    local mode, quote = quote:take_until("]")
+    if #mode == 1 and mode[1].value == "#" then
+        mode = Quote([["#"]])[1]
+    end
+    if #quote > 0 then
+        quote = quote:prepend(",")
+    end
+    return Quote([[
+        select(%s %s)
+    ]], mode, quote)
 end

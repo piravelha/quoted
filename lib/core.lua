@@ -1,3 +1,7 @@
+_G["_"] = function(x)
+    return x
+end
+
 function printbold(str)
     print("\27[1m" .. str .. "\27[0m")
 end
@@ -46,11 +50,11 @@ function repr(object)
                 str = str .. ", "
             end
             if type(k) == "number" then
-                str = str .. tostring(v)
+                str = str .. repr(v)
             else
                 str = str .. "["
-                    .. tostring(k) .. "] = "
-                    .. tostring(v)
+                    .. repr(k) .. "] = "
+                    .. repr(v)
             end
             i = i + 1
         end

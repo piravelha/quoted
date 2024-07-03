@@ -26,6 +26,7 @@ test("simple")
 test("append")
 test("pop")
 test("insert")
+test("spread")
 
 if all_pass then 
     print("\27[32mAll Tests Passed!\27[0m ("
